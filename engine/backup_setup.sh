@@ -26,8 +26,8 @@
 #   backup_setup_v1.sh refresh-stats      # recompute the cached repo dedup/size figures
 #                                         #   (add --force to rescan even if the cache is fresh)
 #   backup_setup_v1.sh --help             # this help
-# Examples (run as root; /usr/local/bin is not on root's login PATH):
-#   /usr/local/bin/vps-tooling/backup_setup_v1.sh
+# Examples (run as root):
+#   kiss-backup-setup            (installed by packaging/install.sh)
 #
 # Run as: root. Exit: 0 ok / 1 error / 2 usage.
 #

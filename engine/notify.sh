@@ -344,7 +344,7 @@ fi
 # from the one engine: PLAIN (text/plain part; fine in terminals + monospace mail)
 # and HTML-escaped art (text/html part, wrapped in a <pre> below) so that
 # proportional-font mail clients render the bolt monospace instead of shearing it.
-BRAND_HEADER="${BRAND_HEADER:-/usr/local/bin/vps-tooling/brand_header_v1.sh}"
+BRAND_HEADER="${BRAND_HEADER:-/usr/local/lib/kiss-backup/brand_header.sh}"
 brand_plain=""; brand_html=""
 if [[ -x "${BRAND_HEADER}" ]]; then
     brand_plain="$("${BRAND_HEADER}" plain 2>/dev/null || true)"
