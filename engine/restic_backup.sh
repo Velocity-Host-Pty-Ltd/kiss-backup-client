@@ -287,19 +287,28 @@ cmd_validate_excludes() {
     [ "$bad" -eq 0 ]
 }
 
-# Official SHA256s of the pinned restic release assets, copied from the release's
-# SHA256SUMS (github.com/restic/restic/releases/download/v<ver>/SHA256SUMS). Bump
-# these together with RESTIC_VERSION. RESTIC_SHA256 in backup.env overrides them.
+# The pinned restic release — the ONE place to bump it. backup.env may set
+# RESTIC_VERSION to hold a box on a specific version deliberately.
+# 0.19.1 (2026-07-05): fixes a false "source file could not be read" (exit 3 →
+# a healthy backup reported failed, #21899) and empty snapshots from unreadable
+# source paths (#5667).
+readonly RESTIC_PINNED_VERSION="0.19.1"
+
+# Official SHA256s of the restic release assets, copied from each release's
+# SHA256SUMS (github.com/restic/restic/releases/download/v<ver>/SHA256SUMS); amd64
+# re-verified against a fresh download. Keep the previous release for rollback.
+# RESTIC_SHA256 in backup.env overrides them.
 restic_pinned_sha256() {
     case "$1" in
+        0.19.1_amd64) echo f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c ;;
+        0.19.1_arm64) echo a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465 ;;
         0.19.0_amd64) echo 13176fe6d89d4357947a2cd107218ab2873a5f9d8e1ac2d4cd1c8e07e6839c21 ;;
         0.19.0_arm64) echo e522ce6bf748d753fee8093e8ec59359972cf5b6bc65fc7c7cf38ae952351d91 ;;
     esac
 }
 
 cmd_install() {
-    local want="${RESTIC_VERSION:-}" sha="${RESTIC_SHA256:-}" arch
-    [ -n "$want" ] || die "RESTIC_VERSION unset — refusing to install an unpinned restic"
+    local want="${RESTIC_VERSION:-$RESTIC_PINNED_VERSION}" sha="${RESTIC_SHA256:-}" arch
     if [ -x "$RESTIC_BIN" ] && "$RESTIC_BIN" version 2>/dev/null | grep -q "restic ${want}\b"; then
         log "restic ${want} already installed at $RESTIC_BIN"
         return 0

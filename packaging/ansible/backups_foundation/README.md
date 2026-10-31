@@ -24,7 +24,7 @@ control-plane concern), so the role is a complete no-op until enabled in
 ```yaml
 backups_enabled: true
 backups_repo: "sftp:kiss:/data/restic-repo"
-backups_restic_sha256: "<sha256 of restic_0.19.0_linux_amd64>"   # recommended
+backups_restic_sha256: ""   # empty = the engine's built-in pin for that version/arch
 # optional overrides: backups_paths, retention, schedules, caps — see defaults/main.yml
 ```
 

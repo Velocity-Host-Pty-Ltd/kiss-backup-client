@@ -62,7 +62,6 @@ KISS_USER="${KISS_USER:-}"
 KISS_PORT="${KISS_PORT:-22}"
 PASSFILE="${PASSFILE:-/etc/restic/backup.pass}"
 RESTIC_BIN="${RESTIC_BIN:-/usr/local/bin/restic}"
-RESTIC_VERSION="${RESTIC_VERSION:-0.19.0}"
 # restic 0.19 FATALs without a writable cache when there's no $HOME — exactly the case when
 # refresh-stats runs from the console's `systemd-run` background unit. Pin a HOME-independent
 # cache dir for every restic call here (matching the engines). Without it the background stats
@@ -363,7 +362,6 @@ install -d -m 0700 "$(dirname "$PASSFILE")"
     printf 'BACKUP_PATHS="%s"\n' "$PATHS"
     printf 'BACKUP_TAG="%s"\n' "$(hostname -s 2>/dev/null || echo vps)"
     printf 'RESTIC_BIN="%s"\n' "$RESTIC_BIN"
-    printf 'RESTIC_VERSION="%s"\n' "$RESTIC_VERSION"
 } > "$BACKUP_ENV"
 chmod 0640 "$BACKUP_ENV"
 

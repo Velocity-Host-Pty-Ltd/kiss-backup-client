@@ -112,6 +112,24 @@ render_unit() {
     printf '%s\n' "$body" > "$out" && chmod 0644 "$out" || die "could not write $out"
 }
 
+# On an already-configured box, bring restic to the engine's pin — the timers never
+# reinstall it, so without this a pin bump would never reach existing boxes. Older
+# wizards wrote RESTIC_VERSION into backup.env; drop that line from a WIZARD-written
+# file so the engine's pin applies (an operator- or role-set value is left alone).
+upgrade_restic() {
+    local env="$KBC_CONFIG_DIR/backup.env" tmp
+    [ -r "$env" ] || return 0
+    if head -1 "$env" | grep -q '^# backup-setup ' && grep -q '^RESTIC_VERSION=' "$env"; then
+        tmp="$(mktemp)" && grep -v '^RESTIC_VERSION=' "$env" > "$tmp" \
+            && install -m 0640 "$tmp" "$env" && rm -f "$tmp" \
+            || die "could not update $env"
+        say "Removed the wizard-written RESTIC_VERSION from $env (the engine's pin now applies)."
+    fi
+    say "Checking restic against the pinned version ..."
+    BACKUP_ENV="$env" KBC_CONFIG_DIR="$KBC_CONFIG_DIR" "$LIB/restic_backup.sh" install \
+        || die "restic upgrade failed — backups keep running on the current binary; see the output above"
+}
+
 do_install() {
     install_deps
 
@@ -146,6 +164,7 @@ do_install() {
 
     say ""
     if systemctl is-enabled --quiet kiss-backup.timer 2>/dev/null; then
+        upgrade_restic
         say "Upgraded. Backups were already configured — the timers stay enabled and pick up"
         say "the new code on their next run. Check with:  kiss-backup-setup status"
     else
