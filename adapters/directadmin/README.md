@@ -15,6 +15,10 @@ adapter lets the engine restore **one account** from any hourly snapshot.
 
 ## Using it
 
+From the console: **kiss-console → Backups → Restore an account** walks through account →
+backup → what (files + databases / files / databases / one folder) → merge or mirror → preview →
+confirm. The same from the CLI:
+
 ```
 kiss-backup list-units
 kiss-backup restore-unit john                       # prints the plan, changes nothing

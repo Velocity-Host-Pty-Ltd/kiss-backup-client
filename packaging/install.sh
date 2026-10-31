@@ -36,9 +36,8 @@ RESTIC_DIR="${RESTIC_DIR:-/etc/restic}"
 # Unit templates and which subset is core (always) vs optional (wizard decides).
 UNITS="kiss-backup kiss-backup-check kiss-backup-prune kiss-backup-drill
        kiss-backup-db-full kiss-backup-db-diff kiss-backup-db-dump"
-# Console menus shipped standalone. 40-backup-restore needs backup_restore (the
-# per-account path, decoupling item 1) — not shipped until the DA adapter lands.
-MENUS="30-backups.menu 35-backup-stats.menu"
+# Console menus shipped standalone.
+MENUS="30-backups.menu 35-backup-stats.menu 40-account-restore.menu"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
@@ -151,6 +150,7 @@ do_install() {
     install -m 0750 "$SRC/engine/notify.sh"        "$LIB/notify.sh"
     install -m 0755 "$SRC/brand/brand_header.sh"   "$LIB/brand_header.sh"
     install -m 0750 "$SRC/console/console.sh"      "$LIB/console.sh"
+    install -m 0750 "$SRC/console/restore_account.sh" "$LIB/restore_account.sh"
     # Layer-2/3 adapters (docs/architecture.md §1.6): adapters/<name>/adapter.
     local a
     for a in "$SRC"/adapters/*/adapter; do

@@ -1,0 +1,6 @@
+# vps-console descriptor — guided per-account restore (needs root).
+category="Backups"
+title="Restore an account (files / databases / one folder)"
+command="/usr/local/lib/kiss-backup/restore_account.sh"
+needs_root=1
+order=40
