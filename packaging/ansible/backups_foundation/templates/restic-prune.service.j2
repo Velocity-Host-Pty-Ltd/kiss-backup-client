@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — weekly forget + prune. forget applies GFS
+# retention (metadata only); prune is the disk-reclaim step and LOCKS the repo, so
+# it runs weekly, not per-backup (handover §13 / prototype runbook).
+[Unit]
+Description=vps-baseline restic retention (forget + prune)
+After=network-online.target
+Wants=network-online.target
+{% if backups_alert_on_check_failure | bool %}
+OnFailure=vps-service-alert@%n.service
+{% endif %}
+
+[Service]
+Type=oneshot
+ExecStart={{ backups_engine_path }} forget
+ExecStart={{ backups_engine_path }} prune
+{% if backups_alert_on_check_failure | bool %}
+# All-clear: a clean forget+prune after a prior failure emits the one-shot RECOVERED
+# notice + clears the flag ('-' = never fail the unit on it; silent if not alerting).
+ExecStartPost=-{{ backups_watchdog_helper_path }} recover service-failed-%n
+{% endif %}

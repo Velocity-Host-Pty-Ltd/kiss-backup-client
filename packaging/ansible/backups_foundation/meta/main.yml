@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  role_name: backups_foundation
+  author: Velocity Host
+  description: restic backup engine + timers (nightly backup, weekly check + prune); one repo per VPS, SFTP. Opt-in.
+  license: proprietary
+  min_ansible_version: "2.11"
+  platforms:
+    - name: EL
+      versions: ["8"]
+# Soft dependency: check-failure escalation uses service_watchdog's
+# vps-service-alert@.service template (a core foundation, present fleet-wide).
+# Not a hard role dependency — disable via backups_alert_on_check_failure.
+dependencies: []

@@ -1,0 +1,6 @@
+# vps-console descriptor — backups status (read-only; needs root to read the config).
+category="Backups"
+title="Backups - what's backed up + schedule (status)"
+command="/usr/local/bin/vps-tooling/backup_setup_v1.sh status"
+needs_root=1
+order=30

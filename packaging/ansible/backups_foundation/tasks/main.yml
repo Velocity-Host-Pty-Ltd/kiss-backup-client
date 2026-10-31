@@ -1,0 +1,248 @@
+---
+# backups_foundation — deploy the restic engine + drive it from systemd timers.
+# OPT-IN: the whole role is gated on backups_enabled so a fresh clone never tries
+# to back up before a repo target + SFTP creds exist (handover §11 build shape).
+#
+# The backup SFTP keypair + its MOTD advert are NOT here — they are a foundational
+# prerequisite generated EARLY by ssh_access_foundation (before the notification
+# welcome advertises the pubkey + before backup-setup). The rest of this role is the
+# backup machinery: deploy engine, render config, init the repo, install timers.
+
+# UNGATED: the backup-setup wizard must be present BEFORE opt-in (it's what the
+# operator runs to enable backups), so deploy it every converge regardless of
+# backups_enabled — single source of truth §1.2, from the baseline checkout.
+- name: Ensure the vps-tooling bin dir exists
+  ansible.builtin.file:
+    path: "{{ backups_engine_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy the backup-setup wizard (always present; the opt-in entry point)
+  ansible.builtin.copy:
+    src: "{{ backups_repo_dir }}/backup_setup_v1.sh"
+    dest: "{{ backups_engine_path | dirname }}/backup_setup_v1.sh"
+    owner: root
+    group: root
+    mode: "0750"
+    remote_src: true
+
+- name: Configure restic backups (opt-in via backups_enabled)
+  when: backups_enabled | bool
+  block:
+
+    - name: Assert a valid repo target is configured
+      ansible.builtin.assert:
+        that:
+          - backups_repo | length > 0
+          # Must carry a path, not just a backend/host (e.g. reject "sftp:host:" with
+          # no path — that lands restic at the chroot root and fails on permissions).
+          - backups_repo is search(':/')
+        fail_msg: "backups_repo is missing or has no path (got '{{ backups_repo }}') — set a full target like sftp:kiss-headless:/data/restic-repo in host.yml"
+        quiet: true
+
+    - name: Ensure the vps-tooling bin dir exists
+      ansible.builtin.file:
+        path: "{{ backups_engine_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Assert the backup engine exists in the baseline checkout
+      ansible.builtin.stat:
+        path: "{{ backups_repo_dir }}/restic_backup_v1.sh"
+      register: backups_engine_src
+      failed_when: not backups_engine_src.stat.exists
+
+    - name: Deploy the backup engine (single source of truth, §1.2)
+      ansible.builtin.copy:
+        src: "{{ backups_repo_dir }}/restic_backup_v1.sh"
+        dest: "{{ backups_engine_path }}"
+        owner: root
+        group: root
+        mode: "0750"
+        remote_src: true   # source is the on-host baseline checkout, not the controller
+
+    - name: Deploy the on-demand (per-tenant checkpoint) engine (§1.2)
+      ansible.builtin.copy:
+        src: "{{ backups_repo_dir }}/backup_ondemand_v1.sh"
+        dest: "{{ backups_ondemand_engine_path }}"
+        owner: root
+        group: root
+        mode: "0750"
+        remote_src: true
+
+    - name: Deploy the guided backup/restore front-end (vps-console flow, §1.2)
+      ansible.builtin.copy:
+        src: "{{ backups_repo_dir }}/backup_restore_v1.sh"
+        dest: "{{ backups_restore_frontend_path }}"
+        owner: root
+        group: root
+        mode: "0750"
+        remote_src: true
+
+    - name: Ensure config + passphrase dirs exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ backups_env_path | dirname }}"
+          mode: "0755"
+        - path: "{{ backups_passfile | dirname }}"
+          mode: "0700"
+
+    - name: Render the backup config (sourced by the engine)
+      ansible.builtin.template:
+        src: backup.env.j2
+        dest: "{{ backups_env_path }}"
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: Deploy the operator exclude list (create ONCE — never clobber operator edits)
+      ansible.builtin.template:
+        src: backup-excludes.conf.j2
+        dest: "{{ backups_exclude_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false   # operator-owned: render the instructional template only if absent
+
+    - name: Install/verify the pinned restic binary
+      ansible.builtin.command: "{{ backups_engine_path }} install"
+      register: backups_install
+      changed_when: "'installed restic ' in backups_install.stdout"
+
+    - name: Initialise the repo + passphrase if absent (idempotent)
+      ansible.builtin.command: "{{ backups_engine_path }} init"
+      register: backups_init
+      changed_when: "'initialising repo' in backups_init.stdout"
+
+    - name: Install backup/check/prune service + timer units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - restic-backup.service
+        - restic-backup.timer
+        - restic-check.service
+        - restic-check.timer
+        - restic-prune.service
+        - restic-prune.timer
+      notify: Reload systemd daemon
+
+    - name: Enable + start the backup, check and prune timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop:
+        - restic-backup.timer
+        - restic-check.timer
+        - restic-prune.timer
+
+    - name: Configure the DB slice (mariabackup chain + per-tenant dumps)
+      when: backups_db_enabled | bool
+      block:
+
+        - name: Ensure the DB staging dirs exist
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          loop:
+            - "{{ backups_db_stage }}"
+            - "{{ backups_db_dump_dir }}"
+
+        - name: Install DB backup/dump service + timer units
+          ansible.builtin.template:
+            src: "{{ item }}.j2"
+            dest: "/etc/systemd/system/{{ item }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop:
+            - restic-db-full.service
+            - restic-db-full.timer
+            - restic-db-diff.service
+            - restic-db-diff.timer
+            - restic-db-dump.service
+            - restic-db-dump.timer
+          notify: Reload systemd daemon
+
+        - name: Enable + start the DB timers
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+            daemon_reload: true
+          loop:
+            - restic-db-full.timer
+            - restic-db-diff.timer
+            - restic-db-dump.timer
+
+    - name: Configure the restore-drill (verify backups actually restore)
+      when: backups_drill_enabled | bool
+      block:
+
+        - name: Install restore-drill service + timer units
+          ansible.builtin.template:
+            src: "{{ item }}.j2"
+            dest: "/etc/systemd/system/{{ item }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop:
+            - restic-drill.service
+            - restic-drill.timer
+          notify: Reload systemd daemon
+
+        - name: Enable + start the restore-drill timer
+          ansible.builtin.systemd:
+            name: restic-drill.timer
+            enabled: true
+            state: started
+            daemon_reload: true
+
+# Opt-OUT: when backups are turned off, don't just stop converging the timers —
+# actively disable + remove them, so a box that opts out isn't left firing restic
+# timers that fail with no config (the reverse of the opt-in block above).
+- name: Tear down backups when opted out (backups_enabled false)
+  when: not (backups_enabled | bool)
+  block:
+
+    - name: Find any installed restic units
+      ansible.builtin.find:
+        paths: /etc/systemd/system
+        patterns: 'restic-*.timer,restic-*.service'
+      register: backups_units
+
+    - name: Disable + stop restic timers (opt-out)
+      ansible.builtin.systemd:
+        name: "{{ item.path | basename }}"
+        enabled: false
+        state: stopped
+      loop: "{{ backups_units.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      when: item.path is search('\.timer$')
+
+    - name: Remove restic unit files (opt-out)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ backups_units.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      notify: Reload systemd daemon

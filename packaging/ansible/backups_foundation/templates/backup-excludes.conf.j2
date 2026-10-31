@@ -1,0 +1,37 @@
+# Velocity Host — backup exclude list (operator-editable)
+# =====================================================================================
+# Extra paths to EXCLUDE from the hourly offsite backup — one pattern per line.
+# This file is YOURS to edit. The 15-minute converge creates it once and then NEVER
+# overwrites it, so your changes are safe.
+#
+# ALREADY EXCLUDED (you do NOT need to list these):
+#   - the live database files (/var/lib/mysql) — the DB backup handles databases
+#   - restic's own cache
+#   - known WordPress backup-PLUGIN output (UpdraftPlus, BackupBuddy/Solid Backups,
+#     Duplicator, WPvivid, BackWPup, All-in-One WP Migration, WP STAGING, WP Time
+#     Capsule, WPBackItUp, Total Upkeep, Backup Migration) — curated centrally + kept
+#     current for you.
+#
+# WHEN TO ADD A LINE:
+#   You have a large REDUNDANT folder bloating the backup — a custom/manual backup
+#   dir, a big regenerable cache, a scratch/temp dir. NOTE: excluding something means
+#   it will NOT be recoverable. Only exclude what you can afford to lose.
+#
+# HOW TO WRITE A PATTERN (restic syntax):
+#   - a bare name (no slash) matches that file/dir ANYWHERE:   my-scratch
+#   - an absolute path matches exactly:                        /home/alice/public_html/dump
+#   - use  *  where the ACCOUNT NAME goes, so ONE line covers EVERY account:
+#         /home/*/public_html/wp-content/my-custom-backups
+#   - use  **  to match across any depth:                      **/throwaway-cache
+#   - globs work:                                              /home/*/public_html/**/*.iso
+#
+# SAFETY — NEVER write these (they would exclude your WHOLE backup):
+#       /      *      **      /home      /home/*      /etc      /var      /usr/local
+#   The tool screens these out + warns automatically, but don't rely on it — keep
+#   every pattern SPECIFIC (point at a folder, never a top-level root).
+#
+# AFTER EDITING, validate (lists each pattern as ok / DANGEROUS):
+#       /usr/local/bin/vps-tooling/restic_backup_v1.sh validate-excludes
+# =====================================================================================
+# Add your patterns below this line:
+

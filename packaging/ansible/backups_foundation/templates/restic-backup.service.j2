@@ -1,0 +1,28 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — HOURLY restic file backup (oneshot, timer-driven).
+# restic is incremental + dedup: the FIRST run uploads everything (big), each later
+# run only the changed chunks (tiny to move out + ingest). systemd runs ONE instance
+# of this unit at a time, so an hourly tick that fires while the first big backup is
+# still running is SKIPPED, never run concurrently — no overlap / upside-down pyramid.
+# init is idempotent (no-op once the repo exists); forget after a successful backup
+# trims to the GFS window (keep-hourly 24 = rolling 24h), metadata-only — the hourly
+# "discard". The weekly prune (separate unit) reclaims disk. Caps (GOMAXPROCS/nice/
+# ionice) are applied inside the engine from {{ backups_env_path }}.
+[Unit]
+Description=vps-baseline restic file backup
+After=network-online.target
+Wants=network-online.target
+{% if backups_alert_on_check_failure | bool %}
+OnFailure=vps-service-alert@%n.service
+{% endif %}
+
+[Service]
+Type=oneshot
+ExecStartPre={{ backups_engine_path }} init
+ExecStart={{ backups_engine_path }} backup
+ExecStartPost={{ backups_engine_path }} forget
+{% if backups_alert_on_check_failure | bool %}
+# All-clear: a clean backup after a prior failure emits the one-shot RECOVERED notice
+# + clears the flag ('-' = never fail the unit on it; silent if it wasn't alerting).
+ExecStartPost=-{{ backups_watchdog_helper_path }} recover service-failed-%n
+{% endif %}

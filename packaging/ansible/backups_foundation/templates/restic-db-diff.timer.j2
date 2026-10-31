@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — hourly DB differential schedule.
+[Unit]
+Description=vps-baseline restic DB differential (scheduled)
+
+[Timer]
+OnCalendar={{ backups_db_diff_oncalendar }}
+RandomizedDelaySec={{ backups_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

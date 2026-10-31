@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — daily per-database logical mysqldump (one file
+# per DB, uncompressed) then ships it into restic. The portable single-DB restore
+# path; complements the physical chain.
+[Unit]
+Description=vps-baseline restic DB logical dump
+After=network-online.target mariadb.service
+Wants=network-online.target
+{% if backups_alert_on_check_failure | bool %}
+OnFailure=vps-service-alert@%n.service
+{% endif %}
+
+[Service]
+Type=oneshot
+ExecStart={{ backups_engine_path }} db-dump
+{% if backups_alert_on_check_failure | bool %}
+# All-clear: a clean start after a prior failure emits the one-shot RECOVERED notice
+# + clears the flag ('-' = never fail the unit on it; silent if it wasn't alerting).
+ExecStartPost=-{{ backups_watchdog_helper_path }} recover service-failed-%n
+{% endif %}

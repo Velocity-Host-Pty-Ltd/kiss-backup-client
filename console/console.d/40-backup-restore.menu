@@ -1,0 +1,6 @@
+# vps-console descriptor — guided per-tenant backup / restore (needs root).
+category="Backups"
+title="Backup / Restore a site (pick account - files/DB/both)"
+command="/usr/local/bin/vps-tooling/backup_restore_v1.sh"
+needs_root=1
+order=40

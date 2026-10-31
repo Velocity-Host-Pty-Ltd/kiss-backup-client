@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — weekly integrity-check schedule.
+[Unit]
+Description=vps-baseline restic integrity check (scheduled)
+
+[Timer]
+OnCalendar={{ backups_check_oncalendar }}
+RandomizedDelaySec={{ backups_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

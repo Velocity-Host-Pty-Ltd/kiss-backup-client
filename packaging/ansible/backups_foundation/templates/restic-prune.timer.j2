@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — weekly retention (forget + prune) schedule.
+[Unit]
+Description=vps-baseline restic retention (scheduled)
+
+[Timer]
+OnCalendar={{ backups_prune_oncalendar }}
+RandomizedDelaySec={{ backups_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

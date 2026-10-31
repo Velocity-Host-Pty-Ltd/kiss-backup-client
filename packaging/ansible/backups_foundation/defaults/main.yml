@@ -1,0 +1,104 @@
+---
+# defaults/main.yml — backups_foundation role
+#
+# Deploys the restic backup engine (vps-tooling/restic_backup_v1.sh, §1.2 single
+# source of truth) and the systemd timers that drive it: a daily file backup, a
+# weekly integrity check (the automated DETECTION half — failure routes to the
+# notification framework), and a weekly prune (the disk-reclaim step, kept separate
+# from forget per handover §13). One repo per VPS, client-side AES-256, SFTP backend.
+#
+# OPT-IN: disabled by default. A fresh clone must NOT try to back up until a repo
+# target + reachable SFTP credentials exist (an onboarding/control-plane concern),
+# so the whole role is a no-op until backups_enabled is set true in host.yml.
+#
+# Short backups_* var prefix is deliberate (conventions §5; var-naming skipped).
+
+backups_enabled: false
+
+# NB: the backup SFTP keypair + its MOTD advert are generated EARLY by
+# ssh_access_foundation (ssh_access_backup_key, default /etc/restic/kiss_id_rsa) —
+# a foundational prerequisite, not a backups-role concern. See that role.
+
+# --- engine deployment (from the on-host baseline checkout) ---
+backups_repo_dir: /var/lib/ansible/baseline/vps-tooling
+backups_engine_path: /usr/local/bin/vps-tooling/restic_backup_v1.sh
+# On-demand per-tenant checkpoint engine (operator-initiated; rides the same repo).
+backups_ondemand_engine_path: /usr/local/bin/vps-tooling/backup_ondemand_v1.sh
+# Guided whiptail backup/restore front-end (launched from vps-console).
+backups_restore_frontend_path: /usr/local/bin/vps-tooling/backup_restore_v1.sh
+backups_env_path: /etc/vps-tooling/backup.env
+
+# --- restic binary (pinned + SHA-verified; handover re-validation = >=0.19) ---
+backups_restic_bin: /usr/local/bin/restic
+backups_restic_version: "0.19.0"
+# sha256 of restic_<ver>_linux_amd64 (post-bunzip2). Empty = install warns + skips
+# checksum verification; set this in host.yml/group_vars for a real fleet.
+backups_restic_sha256: ""
+
+# --- repo + sources ---
+# REQUIRED when enabled, e.g. "sftp:kiss-headless:/data/restic-repo".
+backups_repo: ""
+backups_passfile: /etc/restic/backup.pass    # generated on first run if absent (handover §9)
+# Covers data (/home) + configs (/etc) + the bits that live nowhere else: crontabs
+# (/var/spool/cron), root state incl. acme.sh certs (/root), and LiteSpeed config
+# (/usr/local/lsws/conf, skipped by the engine if absent on Apache boxes). The live
+# DB datadir /var/lib/mysql is excluded by the engine — the DB slice handles DBs.
+backups_paths: "/home /etc /root /var/spool/cron /usr/local/lsws/conf"
+backups_excludes: ""                          # extra space-separated exclude patterns (role-set)
+backups_exclude_file: /etc/vps-tooling/backup-excludes.conf   # operator-editable list (created once, never clobbered)
+backups_tag: "{{ ansible_hostname }}"
+
+# --- resource caps (so a backup can never starve tenant sites) ---
+backups_gomaxprocs: 2
+backups_nice: 19
+backups_ionice_class: 3        # 3 = idle I/O class
+
+# --- retention: GFS policy "B" (handover §13 default) ---
+backups_keep_hourly: 24
+backups_keep_daily: 14
+backups_keep_weekly: 8
+backups_keep_monthly: 12
+
+# --- schedules (staggered; RandomizedDelaySec spreads the fleet) ---
+backups_backup_oncalendar: "*-*-* *:00:00"    # HOURLY file backup; keep-hourly 24 = rolling 24h window
+backups_check_oncalendar: "Sun *-*-* 03:30:00"  # weekly structural integrity check
+backups_prune_oncalendar: "Sun *-*-* 04:30:00"  # weekly disk reclaim (locks the repo)
+backups_randomized_delay: 1800                  # up to 30 min jitter (anti-thundering-herd)
+
+# Wire check failures to the service_watchdog alert template (a core foundation,
+# present fleet-wide). Set false to leave the check timer un-escalated.
+backups_alert_on_check_failure: true
+
+# Recovery (all-clear): when an alerting backup unit starts cleanly after a prior
+# failure, this helper emits the one-shot RECOVERED notice + clears the alert flag
+# (silent if it wasn't alerting). Mirrors the service_watchdog role's
+# watchdog_helper_path (same core foundation that provides vps-service-alert@).
+backups_watchdog_helper_path: /usr/local/bin/vps-tooling/service_watchdog_v1.sh
+
+# --- DB slice (mariabackup chain + per-database logical dumps) ---
+# Opt-in WITHIN backups_enabled: a second gate so the file backup can run without
+# the (heavier, MariaDB-touching) DB slice. Method (handover §3.1, refined §13):
+# nightly full + hourly DIFFERENTIAL (each diff vs the full, not the prior diff —
+# any point restores from full + one diff; a degraded diff can't break the chain)
+# for the physical path, + a daily self-contained per-database mysqldump (the
+# unchained fallback + portable single-DB restore). Restore is an operator runbook
+# step (restore-aside), never an engine action.
+backups_db_enabled: false
+backups_db_stage: /var/lib/vps-backups/mariabackup   # physical-chain staging (full + diffs)
+backups_db_dump_dir: /var/lib/vps-backups/dumps      # per-database logical dumps
+backups_mariabackup_bin: mariabackup
+backups_db_full_oncalendar: "*-*-* 01:00:00"         # nightly full (new chain base)
+backups_db_diff_oncalendar: "*-*-* *:15:00"          # hourly differential (changed pages since the full)
+backups_db_dump_oncalendar: "*-*-* 01:40:00"         # daily per-database logical dump
+
+# --- restore-drill (prove backups actually RESTORE; goal = process health) ---
+# On by default WHEN backups are enabled (opt-out per host); discloses to owner via
+# the welcome email + MOTD. File spot-check is near-zero; the DB import is the
+# load-bearing part (own opt-out), pinned to 1 CPU + idle IO + off-hours, rotating
+# one-or-few DBs per run up to a size budget (never the whole fleet at once).
+backups_drill_enabled: true                          # the whole drill (opt-out)
+backups_drill_db_import: true                        # the heavy DB import-verify (load-sensitive opt-out)
+backups_drill_file: /etc/hostname                    # small sentinel restored end-to-end (must be within backups_paths)
+backups_drill_db_budget_bytes: 1610612736            # ~1.5 GiB restored per run (rotating cursor)
+backups_drill_scratch: /var/lib/vps-backups/drill
+backups_drill_oncalendar: "Sun *-*-* 05:30:00"       # weekly, off-hours, after backup/check/prune

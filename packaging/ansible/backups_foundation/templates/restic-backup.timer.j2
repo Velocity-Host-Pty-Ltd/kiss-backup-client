@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — hourly file backup schedule. RandomizedDelaySec
+# staggers the fleet within the hour (< the 1h interval, so no tick is skipped).
+[Unit]
+Description=vps-baseline restic file backup (scheduled)
+
+[Timer]
+OnCalendar={{ backups_backup_oncalendar }}
+RandomizedDelaySec={{ backups_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# vps-baseline backups_foundation — restore-drill: prove backups actually RESTORE
+# (file spot-check + rotating budget-bounded per-DB import-verify). Non-destructive
+# (scratch + a throwaway temp DB, dropped). PINNED to 1 CPU + idle IO so it can
+# never starve tenant sites even mid-import; failure routes to the notifier.
+[Unit]
+Description=vps-baseline restic restore-drill (verify backups restore)
+After=network-online.target mariadb.service
+Wants=network-online.target
+{% if backups_alert_on_check_failure | bool %}
+OnFailure=vps-service-alert@%n.service
+{% endif %}
+
+[Service]
+Type=oneshot
+CPUAffinity=0
+Nice=19
+IOSchedulingClass=idle
+ExecStart={{ backups_engine_path }} restore-drill
+{% if backups_alert_on_check_failure | bool %}
+# All-clear: a clean drill after a prior failure emits the one-shot RECOVERED notice
+# + clears the flag ('-' = never fail the unit on it; silent if it wasn't alerting).
+ExecStartPost=-{{ backups_watchdog_helper_path }} recover service-failed-%n
+{% endif %}
