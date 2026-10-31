@@ -40,13 +40,15 @@ actbutton=${3}
 checkbox=${2}
 actcheckbox=${3}
 acttextbox=${3}"
-    local rc
-    whiptail --title "Palette ${1}" --notags --ok-button "Ok" --cancel-button "Cancel" \
+    local rc _sel
+    # The screen is drawn on stdout and the answer comes back on stderr — capture the
+    # answer only (never redirect the drawing away, or the dialog is invisible).
+    _sel="$(whiptail --title "Palette ${1}" --notags --ok-button "Ok" --cancel-button "Cancel" \
         --menu "${4}\n\nPress TAB until <Ok> or <Cancel> is highlighted, note which LOOKS highlighted, then press ENTER." \
         16 74 3 \
         a "Row one" \
         b "Row two" \
-        c "Row three" 3>&1 1>&2 2>&3 >/dev/null
+        c "Row three" 3>&1 1>&2 2>&3)"
     rc=$?
     local pressed; [ "$rc" -eq 0 ] && pressed="Ok" || pressed="Cancel"
     whiptail --title "Palette ${1}" --msgbox "You actually pressed:  ${pressed}\n\nDid that match the button that LOOKED highlighted?" 10 60
