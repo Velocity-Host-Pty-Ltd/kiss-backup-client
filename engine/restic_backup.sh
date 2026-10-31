@@ -33,6 +33,11 @@
 #   restic_backup_v1.sh db-dump                 # per-database mysqldump -> restic (daily, logical)
 #   restic_backup_v1.sh restore-drill           # verify backups RESTORE (file + rotating DB import); non-destructive
 #   restic_backup_v1.sh validate-excludes       # screen the operator exclude file for dangerous (root-nuking) patterns
+#   restic_backup_v1.sh list-units              # the adapter's restorable units (e.g. DA accounts)
+#   restic_backup_v1.sh restore-unit <unit> [--snapshot ID] [--db-snapshot ID] [--only PATH]
+#         [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]
+#                                               # restore ONE unit from the whole-box snapshots via
+#                                               # the adapter; without --yes it only prints the plan
 # Examples (real on-box path; /usr/local/bin is not on root's login PATH):
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh snapshots
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh check --read-data-subset=5%
@@ -103,6 +108,13 @@ DRILL_DB_IMPORT="${BACKUP_DRILL_DB_IMPORT:-1}"            # 1=import-verify dump
 DRILL_DB_BUDGET_BYTES="${BACKUP_DRILL_DB_BUDGET_BYTES:-1610612736}"  # ~1.5 GiB restored/run
 DRILL_TMPDB="_restoredrill"
 DRILL_CURSOR="$DRILL_SCRATCH/.cursor"
+
+# Per-unit restore (docs/architecture.md §1–§2). ADAPTER names the active Layer-2
+# adapter (set by the wizard / installer, e.g. ADAPTER=directadmin); it's found in the
+# operator drop-in dir first, then the installed set.
+ADAPTER="${ADAPTER:-}"
+ADAPTER_DIR="${KBC_ADAPTER_DIR:-/usr/local/lib/kiss-backup/adapters}"
+RESTORE_ROOT="${BACKUP_RESTORE_ROOT:-/var/lib/kiss-backups/restore}"
 
 [ -n "${BACKUP_REPO:-}" ] || die "BACKUP_REPO unset in $BACKUP_ENV"
 
@@ -195,7 +207,7 @@ clear_stale_locks() { restic_plain unlock >/dev/null 2>&1 || true; }
 BACKUP_LOCK="${BACKUP_LOCK:-/run/lock/kiss-backup.lock}"
 take_backup_lock() {            # take_backup_lock nowait | <wait-seconds>
     command -v flock >/dev/null 2>&1 || { log "WARN: flock not found — backup/restore mutex disabled"; return 0; }
-    exec 9>"$BACKUP_LOCK" 2>/dev/null || { log "WARN: cannot open $BACKUP_LOCK — mutex disabled"; return 0; }
+    { exec 9>"$BACKUP_LOCK"; } 2>/dev/null || { log "WARN: cannot open $BACKUP_LOCK — mutex disabled"; return 0; }
     case "$1" in
         nowait) flock -n 9 ;;
         *)      flock -w "$1" 9 ;;
@@ -572,6 +584,177 @@ EOF
     [ "$fail" -eq 0 ] || die "restore-drill FAILED ($fail check[s]) — backups may not be restorable"
 }
 
+# --- per-unit restore (adapter contract) ----------------------------------------
+
+# Resolve + validate the active adapter (contract major 1).
+adapter_bin() {
+    local bin
+    [ -n "$ADAPTER" ] || die "ADAPTER unset in $BACKUP_ENV — set e.g. ADAPTER=directadmin"
+    [[ "$ADAPTER" =~ ^[a-z0-9-]+$ ]] || die "invalid ADAPTER '$ADAPTER'"
+    for bin in "$KBC_CONFIG_DIR/adapters.d/$ADAPTER/adapter" "$ADAPTER_DIR/$ADAPTER/adapter"; do
+        [ -x "$bin" ] || continue
+        "$bin" info 2>/dev/null | grep -q '"contract":"1"' \
+            || die "adapter $bin doesn't speak contract 1"
+        printf '%s\n' "$bin"; return 0
+    done
+    die "adapter '$ADAPTER' not found (looked in $KBC_CONFIG_DIR/adapters.d and $ADAPTER_DIR)"
+}
+
+cmd_list_units() { "$(adapter_bin)" list-units; }
+
+# The BACKUP_PATHS root that covers <path> (file snapshots are found by it), or nothing.
+root_for_path() {
+    local p="$1" r
+    # shellcheck disable=SC2086
+    for r in $BACKUP_PATHS; do
+        { [ "$p" = "$r" ] || [[ "$p" == "$r"/* ]]; } && { printf '%s\n' "$r"; return 0; }
+    done
+    return 1
+}
+
+# "<id>\t<YYYY-MM-DD HH:MM:SS>" of a snapshot from restic's compact table. Args are
+# passed to `restic snapshots` (an id, or --path/--tag filters for "latest").
+snap_row() {
+    restic_plain snapshots --compact "$@" 2>/dev/null \
+        | awk '/^[0-9a-f]{8} /{id=$1; t=$2" "$3} END{if (id) print id"\t"t}'
+}
+
+cmd_restore_unit() {
+    local unit="" fsnap="" dsnap="" only="" do_files=1 do_dbs=1 mode=merge dry=0 yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --snapshot)    fsnap="${2:?--snapshot needs an id}"; shift 2 ;;
+            --db-snapshot) dsnap="${2:?--db-snapshot needs an id}"; shift 2 ;;
+            --only)        only="${2:?--only needs a path}"; shift 2 ;;
+            --files-only)  do_dbs=0; shift ;;
+            --dbs-only)    do_files=0; shift ;;
+            --mirror)      mode=mirror; shift ;;
+            --dry-run)     dry=1; shift ;;
+            --yes)         yes=1; shift ;;
+            -*)            die "restore-unit: unknown option $1" ;;
+            *)             [ -z "$unit" ] || die "restore-unit: one unit at a time"; unit="$1"; shift ;;
+        esac
+    done
+    [ -n "$unit" ] || die "usage: restore-unit <unit> [--snapshot ID] [--only PATH] [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]"
+    local ad; ad="$(adapter_bin)"
+    if "$ad" info | grep -q '"preflight"'; then "$ad" preflight || die "adapter preflight failed"; fi
+    "$ad" list-units | cut -f1 | grep -qxF -- "$unit" || die "no unit '$unit' — see: list-units"
+
+    # What belongs to the unit (adapter), narrowed by --only to one sub-path.
+    local -a paths=() dbs=()
+    local p db f r root=""
+    if [ "$do_files" -eq 1 ]; then
+        while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done < <("$ad" paths-for-unit "$unit") \
+            || die "paths-for-unit $unit failed"
+        if [ -n "$only" ]; then
+            case "/$only/" in */../*|*/./*) die "--only path must be clean and absolute" ;; esac
+            local inside=0
+            for p in "${paths[@]}"; do { [ "$only" = "$p" ] || [[ "$only" == "$p"/* ]]; } && inside=1; done
+            [ "$inside" -eq 1 ] || die "--only $only is not inside $unit's paths"
+            paths=("$only")
+        fi
+        local -a covered=()
+        for p in "${paths[@]}"; do
+            if r="$(root_for_path "$p")"; then covered+=("$p"); root="${root:-$r}"
+            else log "WARN: $p is not under any BACKUP_PATHS root — not in the backups, skipped"; fi
+        done
+        paths=("${covered[@]}")
+        [ "${#paths[@]}" -gt 0 ] || { log "no backed-up files for $unit"; do_files=0; }
+    fi
+    if [ "$do_dbs" -eq 1 ]; then
+        while IFS=$'\t' read -r _engine db _owner; do [ -n "$db" ] && dbs+=("$db"); done \
+            < <("$ad" dbs-for-unit "$unit") || die "dbs-for-unit $unit failed"
+        [ "${#dbs[@]}" -gt 0 ] || do_dbs=0
+    fi
+    [ "$do_files" -eq 1 ] || [ "$do_dbs" -eq 1 ] || die "nothing to restore for $unit"
+
+    # Which snapshots: the file snapshot (latest that holds the unit's root, or --snapshot)
+    # and the newest db-dump at or before it (or --db-snapshot).
+    local frow="" drow="" ftime=""
+    if [ "$do_files" -eq 1 ] || [ -z "$dsnap" ]; then
+        if [ -n "$fsnap" ]; then frow="$(snap_row "$fsnap")"; else frow="$(snap_row --path "${root:-/home}")"; fi
+        [ -n "$frow" ] || die "no file snapshot found${fsnap:+ with id $fsnap}"
+        fsnap="${frow%%$'\t'*}"; ftime="${frow#*$'\t'}"
+    fi
+    if [ "$do_dbs" -eq 1 ]; then
+        if [ -n "$dsnap" ]; then
+            drow="$(snap_row "$dsnap")"
+        else
+            # Newest dump at or before the file snapshot; if there's none (e.g. a fresh
+            # box whose first dump came after it), the closest one after — and say so.
+            drow="$(restic_plain snapshots --compact --tag db-dump 2>/dev/null \
+                | awk -v t="$ftime" '/^[0-9a-f]{8} /{ ts=$2" "$3
+                      if (ts <= t) { b=$1; bt=ts } else if (!a) { a=$1; at=ts } }
+                  END { if (b) print b"\t"bt; else if (a) print a"\t"at"\tafter" }')"
+            case "$drow" in *$'\t'after) drow="${drow%$'\t'after}"
+                log "WARN: no DB dump at or before $ftime — using the next one, ${drow#*$'\t'}" ;; esac
+        fi
+        [ -n "$drow" ] || die "no db-dump snapshot found — use --db-snapshot or --files-only"
+        dsnap="${drow%%$'\t'*}"
+    fi
+
+    log "restore plan for $unit ($mode):"
+    [ "$do_files" -eq 1 ] && { log "  files from $fsnap ($ftime):"; for p in "${paths[@]}"; do log "    $p"; done; }
+    [ "$do_dbs" -eq 1 ] && log "  databases from db-dump ${drow/$'\t'/ (}): ${dbs[*]}"
+    if [ "$dry" -eq 0 ] && [ "$yes" -eq 0 ]; then
+        log "nothing changed — add --dry-run to preview the changes, or --yes to restore"
+        return 0
+    fi
+
+    take_backup_lock 600 || die "another backup/restore is running — try again shortly"
+    install -d -m 0700 "$RESTORE_ROOT"
+    local wd; wd="$(mktemp -d "$RESTORE_ROOT/$unit.XXXXXX")" || die "mktemp failed"
+    install -d -m 0700 "$wd/files" "$wd/dbs"
+
+    # Stage from the snapshots.
+    if [ "$do_files" -eq 1 ]; then
+        local -a inc=()
+        for p in "${paths[@]}"; do inc+=(--include "$p"); done
+        restic_capped restore "$fsnap" --target "$wd/files" "${inc[@]}" >/dev/null \
+            || die "staging files from $fsnap failed (workdir kept: $wd)"
+        printf '%s\n' "${paths[@]}" > "$wd/paths"
+    fi
+    if [ "$do_dbs" -eq 1 ]; then
+        local -a dinc=()
+        for db in "${dbs[@]}"; do dinc+=(--include "$DB_DUMP_DIR/$db.sql"); done
+        restic_capped restore "$dsnap" --target "$wd/dbraw" "${dinc[@]}" >/dev/null \
+            || die "staging DB dumps from $dsnap failed (workdir kept: $wd)"
+        for db in "${dbs[@]}"; do
+            if [ -s "$wd/dbraw$DB_DUMP_DIR/$db.sql" ]; then mv "$wd/dbraw$DB_DUMP_DIR/$db.sql" "$wd/dbs/"
+            else log "WARN: no dump of $db in $dsnap (created after it?) — left as is"; fi
+        done
+        rm -rf "$wd/dbraw"
+    fi
+
+    # Safety net: snapshot the unit's CURRENT state first, so the restore can be undone
+    # by restoring the pre-restore snapshot. Skipped for a dry run (nothing changes).
+    if [ "$dry" -eq 0 ]; then
+        local -a cur=()
+        for p in "${paths[@]}"; do [ -e "$p" ] && cur+=("$p"); done
+        if [ "$do_dbs" -eq 1 ]; then
+            install -d -m 0700 "$wd/safety-dbs"
+            for f in "$wd"/dbs/*.sql; do
+                [ -e "$f" ] || continue
+                db="$(basename "$f" .sql)"
+                db_capped "$MYSQLDUMP_BIN" --single-transaction --routines --triggers --events "$db" \
+                    > "$wd/safety-dbs/$db.sql" 2>/dev/null || rm -f "$wd/safety-dbs/$db.sql"
+            done
+            cur+=("$wd/safety-dbs")
+        fi
+        if [ "${#cur[@]}" -gt 0 ]; then
+            restic_capped backup --tag pre-restore --tag "unit-$unit" --tag "$BACKUP_TAG" "${cur[@]}" >/dev/null \
+                || die "pre-restore safety snapshot failed — nothing restored (workdir kept: $wd)"
+            log "safety snapshot of current state taken (tags pre-restore,unit-$unit)"
+        fi
+    fi
+
+    KBC_SNAPSHOT="$fsnap" KBC_WORKDIR="$wd" KBC_DRY_RUN="$dry" KBC_RESTORE_MODE="$mode" \
+        "$ad" restore-unit "$unit" "$wd" || die "adapter restore-unit failed (workdir kept: $wd)"
+    rm -rf "$wd"
+    if [ "$dry" -eq 1 ]; then log "dry run done — nothing changed"
+    else log "restore of $unit done (undo: restore the pre-restore,unit-$unit snapshot)"; fi
+}
+
 usage() {
     sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
@@ -598,6 +781,8 @@ main() {
         db-backup) cmd_db_backup "$@" ;;
         db-dump)   cmd_db_dump "$@" ;;
         restore-drill) cmd_restore_drill "$@" ;;
+        list-units)    cmd_list_units "$@" ;;
+        restore-unit)  cmd_restore_unit "$@" ;;
         validate-excludes) cmd_validate_excludes "$@" ;;
         ""|-h|--help|help) usage 0 ;;
         *) log "unknown subcommand: $cmd"; usage 2 ;;

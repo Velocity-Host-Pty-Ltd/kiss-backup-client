@@ -322,7 +322,8 @@ DB="false"; if yes "Also enable database backups (mariabackup + per-DB dumps)?" 
 if [ -z "${BACKUP_PATHS:-}" ] && [ -d /usr/local/directadmin/data ]; then
     PATHS="$PATHS /usr/local/directadmin/data /usr/local/directadmin/conf"
     PATHS="$PATHS /usr/local/directadmin/custombuild/options.conf /usr/local/directadmin/custombuild/custom"
-    say "DirectAdmin detected — also backing up its account data + config."
+    PATHS="$PATHS /var/named"   # DNS zones — needed to restore an account's domains
+    say "DirectAdmin detected — also backing up its account data, config and DNS zones."
 fi
 
 # Notification email — where the confirmation and backup alerts go (notify.sh reads
@@ -357,6 +358,8 @@ install -d -m 0700 "$(dirname "$PASSFILE")"
     printf '# backup-setup (written by backup_setup.sh; re-run the wizard to change)\n'
     printf 'BACKUP_ENABLED="true"\n'
     printf 'BACKUP_DB_ENABLED="%s"\n' "$DB"
+    # Per-account restore (restore-unit) goes through the panel's adapter.
+    [ -d /usr/local/directadmin/data/users ] && printf 'ADAPTER="directadmin"\n'
     printf 'BACKUP_REPO="%s"\n' "$REPO"
     printf 'BACKUP_PASSFILE="%s"\n' "$PASSFILE"
     printf 'BACKUP_PATHS="%s"\n' "$PATHS"

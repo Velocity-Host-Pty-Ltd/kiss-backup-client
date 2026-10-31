@@ -1,0 +1,221 @@
+#!/bin/bash
+#
+# DirectAdmin adapter (Layer 2)
+# Version: 1.0.0
+# Script Name: adapters/directadmin/adapter
+# Project: KISS-Backup-Client
+# Summary: Answers, for a DirectAdmin box, the adapter contract (docs/architecture.md
+#   §1): which accounts exist, which files + databases belong to each, and how to put
+#   one account back from a staged restore.
+#
+# Purpose:
+#   A unit = one DA user (admin, reseller or user — each owns a home + databases).
+#   Backups stay whole-box (every hourly snapshot already holds every account); this
+#   adapter only decomposes them so a single account can be restored. It replaces, for
+#   DirectAdmin, the tenant-ledger coupling inherited from vps-baseline (EXTRACTION
+#   item 1).
+#
+#   What belongs to an account:
+#     /home/<user>                              sites, mail (imap/), user files
+#     /usr/local/directadmin/data/users/<user>  DA account config, domains, crontab
+#     /etc/virtual/<domain>                     mail accounts / passwords / quotas
+#     /var/named/<domain>.db                    DNS zone
+#     databases <user>_*                        DA enforces the <user>_ prefix
+#
+# Usage:  adapter <verb> [args…]   — verbs per docs/architecture.md §1.3:
+#   info | detect | preflight | list-units | paths-for-unit <u> | dbs-for-unit <u>
+#   owner-for-unit <u> | restore-unit <u> <workdir>
+#
+#   restore-unit reads the workdir layout the engine stages:
+#     <workdir>/files/<absolute path>   the account's paths as they were in the snapshot
+#     <workdir>/dbs/<name>.sql          one mysqldump per database
+#   Env (contract §1.5): KBC_DRY_RUN=1 → show what would change, change nothing;
+#   KBC_RESTORE_MODE=merge (default: overwrite from the snapshot, keep newer extra
+#   files/tables) | mirror (make it exactly as it was: delete extras, drop+recreate DBs).
+#
+# Exit: 0 ok · 1 usage / bad unit · 2 not ready (preflight) · 3 restore step failed ·
+#   10 detect: not a DirectAdmin box.
+
+set -u
+set -o pipefail
+
+DA_DIR="${DA_DIR:-/usr/local/directadmin}"
+DA_USERS="${DA_USERS:-$DA_DIR/data/users}"
+HOME_ROOT="${HOME_ROOT:-/home}"
+VIRTUAL_DIR="${VIRTUAL_DIR:-/etc/virtual}"
+NAMED_DIR="${NAMED_DIR:-/var/named}"
+MYSQL_BIN="${MYSQL_BIN:-mysql}"
+
+err() { printf 'directadmin: %s\n' "$*" >&2; }
+die() { err "$2"; exit "$1"; }
+
+# DA usernames are lowercase letters/digits (DA's own rule); anything else is not ours
+# and must never reach a path or SQL string.
+valid_unit() {
+    [[ "$1" =~ ^[a-z][a-z0-9]{0,15}$ ]] || die 1 "invalid unit-id '$1'"
+    [ -f "$DA_USERS/$1/user.conf" ] || die 1 "no DirectAdmin account '$1'"
+}
+
+conf_get() { sed -n "s/^$2=//p" "$DA_USERS/$1/user.conf" | head -1; }
+
+domains_of() {
+    [ -r "$DA_USERS/$1/domains.list" ] || return 0
+    grep -E '^[A-Za-z0-9.-]+$' "$DA_USERS/$1/domains.list"
+}
+
+v_info() {
+    printf '{"adapter":"directadmin","version":"1","contract":"1","capabilities":["preflight","owner-for-unit"],"unit_noun":"account","has_databases":true}\n'
+}
+
+v_detect() {
+    [ -x "$DA_DIR/directadmin" ] && [ -d "$DA_USERS" ] && exit 0
+    exit 10
+}
+
+v_preflight() {
+    local t bad=0
+    [ -d "$DA_USERS" ] || { err "no $DA_USERS — not a DirectAdmin box"; bad=1; }
+    for t in rsync "$MYSQL_BIN"; do
+        command -v "$t" >/dev/null 2>&1 || { err "missing tool: $t"; bad=1; }
+    done
+    "$MYSQL_BIN" -N -B -e 'SELECT 1' >/dev/null 2>&1 || { err "cannot reach MariaDB/MySQL as root"; bad=1; }
+    [ "$bad" -eq 0 ] || exit 2
+}
+
+v_list_units() {
+    local d u dom
+    for d in "$DA_USERS"/*/; do
+        u="$(basename "$d")"
+        [[ "$u" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ -f "$d/user.conf" ] || continue
+        dom="$(conf_get "$u" domain)"
+        printf '%s\t%s\t%s\n' "$u" "$u${dom:+ ($dom)}" "$(conf_get "$u" usertype || true)"
+    done
+}
+
+v_paths_for_unit() {
+    local u="$1" dom p
+    valid_unit "$u"
+    {
+        printf '%s\n' "$HOME_ROOT/$u" "$DA_USERS/$u"
+        while IFS= read -r dom; do
+            printf '%s\n' "$VIRTUAL_DIR/$dom" "$NAMED_DIR/$dom.db"
+        done < <(domains_of "$u")
+    } | while IFS= read -r p; do [ -e "$p" ] && printf '%s\n' "$p"; done
+}
+
+v_dbs_for_unit() {
+    local u="$1"
+    valid_unit "$u"
+    # LIKE with the underscore escaped: 'john\_%' matches john_wp, not johnny_wp.
+    "$MYSQL_BIN" -N -B -e "SHOW DATABASES LIKE '${u}\\_%'" 2>/dev/null \
+        | while IFS= read -r db; do printf 'mysql\t%s\t%s\n' "$db" "$u"; done
+}
+
+v_owner_for_unit() {
+    valid_unit "$1"
+    printf '%s:%s\n' "$(id -u "$1")" "$(id -g "$1")"
+}
+
+v_restore_unit() {
+    local u="$1" wd="$2" mode="${KBC_RESTORE_MODE:-merge}" dry="${KBC_DRY_RUN:-0}" p rel f db
+    local -a rs=(-aHAX --numeric-ids)
+    valid_unit "$u"
+    [ -d "$wd" ] || die 1 "workdir $wd not found"
+    case "$mode" in merge|mirror) ;; *) die 1 "KBC_RESTORE_MODE must be merge or mirror" ;; esac
+    [ "$dry" = 1 ] && rs+=(-n -i)
+    [ "$mode" = mirror ] && rs+=(--delete)
+
+    # Files: only the account's own paths, each synced onto itself — never a blanket
+    # rsync onto /, so a stray staged path can't land outside the account.
+    if [ -d "$wd/files" ]; then
+        while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            rel="$wd/files$p"
+            [ -e "$rel" ] || continue
+            if [ -d "$rel" ]; then
+                mkdir -p "$p" 2>/dev/null || [ "$dry" = 1 ] || die 3 "cannot create $p"
+                rsync "${rs[@]}" "$rel/" "$p/" || die 3 "rsync failed for $p"
+            else
+                rsync "${rs[@]}" "$rel" "$p" || die 3 "rsync failed for $p"
+            fi
+            if [ "$dry" = 1 ]; then err "files: $p would be restored ($mode)"; else err "files: $p restored ($mode)"; fi
+        done < <(staged_paths "$u" "$wd")
+    fi
+
+    # Databases: only <user>_* names (the DA ownership rule), imported into place.
+    if [ -d "$wd/dbs" ]; then
+        for f in "$wd"/dbs/*.sql; do
+            [ -e "$f" ] || continue
+            db="$(basename "$f" .sql)"
+            [[ "$db" == "${u}_"* ]] && [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] \
+                || { err "skipping $db — not owned by $u"; continue; }
+            if [ "$dry" = 1 ]; then
+                err "db: $db would be imported ($mode)"; continue
+            fi
+            if [ "$mode" = mirror ]; then
+                # Dropping a DB keeps its grants (they live in mysql.db by name).
+                "$MYSQL_BIN" -e "DROP DATABASE IF EXISTS \`$db\`" || die 3 "drop $db failed"
+            fi
+            "$MYSQL_BIN" -e "CREATE DATABASE IF NOT EXISTS \`$db\`" || die 3 "create $db failed"
+            "$MYSQL_BIN" "$db" < "$f" || die 3 "import $db failed"
+            err "db: $db imported ($mode)"
+        done
+    fi
+
+    [ "$dry" = 1 ] && return 0
+    # Let DA rebuild what it generates from the account config, and reload DNS if a
+    # zone came back. Both best-effort: the data is already in place.
+    if [ -d "$wd/files$DA_USERS/$u" ]; then
+        echo "action=rewrite&value=httpd" >> "$DA_DIR/data/task.queue" 2>/dev/null \
+            && err "queued DA httpd rewrite" || err "could not queue DA httpd rewrite (do it from DA)"
+    fi
+    if compgen -G "$wd/files$NAMED_DIR/*.db" >/dev/null; then
+        { rndc reload >/dev/null 2>&1 || systemctl reload named >/dev/null 2>&1; } \
+            && err "reloaded DNS" || err "could not reload named — reload it by hand"
+    fi
+}
+
+# Areas an account may restore into: its home, its DA config, and the mail / DNS of its
+# domains (as listed now OR in the snapshot, so a since-removed domain still restores).
+allowed_roots() {
+    local u="$1" wd="$2" dom
+    printf '%s\n' "$HOME_ROOT/$u" "$DA_USERS/$u"
+    { domains_of "$u"
+      [ -r "$wd/files$DA_USERS/$u/domains.list" ] \
+          && grep -E '^[A-Za-z0-9.-]+$' "$wd/files$DA_USERS/$u/domains.list"
+    } | sort -u | while IFS= read -r dom; do
+        printf '%s\n' "$VIRTUAL_DIR/$dom" "$NAMED_DIR/$dom.db"
+    done
+}
+
+# The paths the engine staged (<workdir>/paths, one per line — whole areas, or a
+# sub-path for a narrowed --only restore), kept only if inside one of the account's
+# areas. A crafted workdir can't widen a restore beyond the account.
+staged_paths() {
+    local u="$1" wd="$2" p a ok roots
+    [ -r "$wd/paths" ] || return 0
+    roots="$(allowed_roots "$u" "$wd")"
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case "$p" in /*) ;; *) err "skipping non-absolute path $p"; continue ;; esac
+        case "/$p/" in */../*|*/./*) err "skipping unsafe path $p"; continue ;; esac
+        ok=0
+        while IFS= read -r a; do
+            { [ "$p" = "$a" ] || [[ "$p" == "$a"/* ]]; } && { ok=1; break; }
+        done <<< "$roots"
+        if [ "$ok" -eq 1 ]; then printf '%s\n' "$p"; else err "skipping $p — outside $u's areas"; fi
+    done < "$wd/paths"
+}
+
+verb="${1:-}"; shift || true
+case "$verb" in
+    info)                          v_info ;;
+    detect)                        v_detect ;;
+    preflight)                     v_preflight ;;
+    list-units|list_units)         v_list_units ;;
+    paths-for-unit|paths_for_unit) [ $# -eq 1 ] || die 1 "usage: paths-for-unit <unit>"; v_paths_for_unit "$1" ;;
+    dbs-for-unit|dbs_for_unit)     [ $# -eq 1 ] || die 1 "usage: dbs-for-unit <unit>"; v_dbs_for_unit "$1" ;;
+    owner-for-unit)                [ $# -eq 1 ] || die 1 "usage: owner-for-unit <unit>"; v_owner_for_unit "$1" ;;
+    restore-unit|restore_unit)     [ $# -eq 2 ] || die 1 "usage: restore-unit <unit> <workdir>"; v_restore_unit "$1" "$2" ;;
+    *) die 1 "usage: adapter info|detect|preflight|list-units|paths-for-unit|dbs-for-unit|owner-for-unit|restore-unit" ;;
+esac

@@ -125,6 +125,17 @@ upgrade_restic() {
             || die "could not update $env"
         say "Removed the wizard-written RESTIC_VERSION from $env (the engine's pin now applies)."
     fi
+    # Per-account restore needs ADAPTER (and, on DA, the DNS zones in the backup).
+    # Add them to a WIZARD-written config on a box the adapter recognises.
+    if head -1 "$env" | grep -q '^# backup-setup ' && ! grep -q '^ADAPTER=' "$env" \
+            && "$LIB/adapters/directadmin/adapter" detect >/dev/null 2>&1; then
+        printf 'ADAPTER="directadmin"\n' >> "$env"
+        say "Added ADAPTER=directadmin to $env (per-account restore)."
+        if ! grep -q '^BACKUP_PATHS=.*/var/named' "$env"; then
+            sed -i 's|^\(BACKUP_PATHS="[^"]*\)"|\1 /var/named"|' "$env"
+            say "Added /var/named (DNS zones) to BACKUP_PATHS in $env."
+        fi
+    fi
     say "Checking restic against the pinned version ..."
     BACKUP_ENV="$env" KBC_CONFIG_DIR="$KBC_CONFIG_DIR" "$LIB/restic_backup.sh" install \
         || die "restic upgrade failed — backups keep running on the current binary; see the output above"
@@ -140,6 +151,13 @@ do_install() {
     install -m 0750 "$SRC/engine/notify.sh"        "$LIB/notify.sh"
     install -m 0755 "$SRC/brand/brand_header.sh"   "$LIB/brand_header.sh"
     install -m 0750 "$SRC/console/console.sh"      "$LIB/console.sh"
+    # Layer-2/3 adapters (docs/architecture.md §1.6): adapters/<name>/adapter.
+    local a
+    for a in "$SRC"/adapters/*/adapter; do
+        [ -f "$a" ] || continue
+        install -d -m 0755 "$LIB/adapters/$(basename "$(dirname "$a")")"
+        install -m 0750 "$a" "$LIB/adapters/$(basename "$(dirname "$a")")/adapter"
+    done
     ln -sfn "$LIB/restic_backup.sh" "$SBIN/kiss-backup"
     ln -sfn "$LIB/backup_setup.sh"  "$SBIN/kiss-backup-setup"
     ln -sfn "$LIB/console.sh"       "$SBIN/kiss-console"

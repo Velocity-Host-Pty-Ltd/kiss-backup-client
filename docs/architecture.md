@@ -138,6 +138,8 @@ The engine passes a small, documented allow-list and nothing else:
 - `KBC_WORKDIR` — same value as the `restore-unit` `<workdir>` arg, for convenience.
 - `KBC_LOG_LEVEL` — `quiet|normal|debug`.
 - `KBC_DRY_RUN` — `1` when the engine wants a no-op rehearsal (adapters MUST honour it).
+- `KBC_RESTORE_MODE` — `merge` (default: overwrite from the snapshot, keep newer extras) or
+  `mirror` (make it exactly as it was: delete extras, drop + recreate databases).
 
 Adapters MUST NOT depend on the engine's own config (`backup.env`), the tenant ledger, or any other
 ambient file *unless that dependency is the adapter's whole point* (the Velocity adapter legitimately
@@ -204,13 +206,31 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
 6. restic backup with per-unit tags so a single unit is addressable at restore time.
 7. retention / prune / check as today (`restic_backup_v1.sh` logic, carried over).
 
-### 2.2 Restore flow (per unit)
+### 2.2 Restore flow (per unit) — implemented 2026-10-31
 
-1. Console/CLI picks a unit + a snapshot.
-2. Engine stages the unit's paths/DB dumps from the snapshot into a scratch `<workdir>`.
-3. `restore-unit <unit-id> <workdir>` — the adapter owns putting files in the right place with the
-   right ownership (`owner-for-unit` if provided) and importing DB dumps.
-4. Whole-box / bare restore remains available as an engine-level path independent of any adapter.
+`restic_backup.sh restore-unit <unit> [--snapshot ID] [--db-snapshot ID] [--only PATH]
+[--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]` (CLI: `kiss-backup restore-unit …`).
+
+1. **Plan.** `list-units` must contain the unit; `paths-for-unit` / `dbs-for-unit` say what
+   belongs to it. `--only` narrows the files to one sub-path (must be inside the unit's paths);
+   paths not under any `BACKUP_PATHS` root are reported and skipped. Snapshots: the file snapshot
+   is the latest that holds the unit's root (or `--snapshot`); the DB snapshot is the newest
+   `db-dump` at or before it, else the closest after it with a warning (or `--db-snapshot`).
+   **Without `--yes` (or `--dry-run`) the engine prints the plan and changes nothing** — the
+   console confirms, the CLI must opt in.
+2. **Stage** into `$BACKUP_RESTORE_ROOT/<unit>.XXXXXX` (default `/var/lib/kiss-backups/restore`):
+   - `<workdir>/files/<absolute path>` — the unit's paths as they were in the snapshot;
+   - `<workdir>/paths` — the exact list of paths staged (whole areas, or the `--only` sub-path);
+   - `<workdir>/dbs/<name>.sql` — one mysqldump per database.
+3. **Safety snapshot** (not for `--dry-run`): the unit's *current* paths plus fresh dumps of the
+   databases being restored are backed up with tags `pre-restore`, `unit-<unit>`. Undo = restore
+   that snapshot (`--snapshot <id>`).
+4. **`restore-unit <unit-id> <workdir>`** — the adapter puts each staged path (only those inside the
+   unit's own areas, never through `..`) back in place and imports the dumps, honouring
+   `KBC_DRY_RUN` / `KBC_RESTORE_MODE`. The workdir is removed on success and kept on failure.
+5. The engine holds the backup/restore mutex throughout (waits up to 10 min).
+
+Whole-box / bare restore remains available as an engine-level path independent of any adapter.
 
 ### 2.3 Feature toggles — not every target has databases
 
@@ -316,10 +336,12 @@ Carried from HANDOVER §10 plus seams exposed above:
    is universal on targets.
 2. **`unit-id` charset** — lock the exact allowed character set (must be a safe restic tag + path
    component). Proposal: `[A-Za-z0-9._-]`, adapter responsible for mapping.
-3. **Partial-failure policy** — one unit's `paths-for-unit` fails mid-run: abort the whole run, or
-   record the unit as failed and continue? (Leaning: continue + non-zero summary.)
-4. **Snapshot ↔ unit mapping** — tags vs separate restic paths per unit. Tags proposed; confirm it
-   scales to many units.
+3. **Partial-failure policy** — moot for backups (they stay whole-box); a restore is one unit and
+   aborts on the first failure, keeping its workdir.
+4. **Snapshot ↔ unit mapping** — **decided 2026-10-31: no per-unit tags or paths.** Every hourly
+   whole-box snapshot already holds every unit; a unit restore extracts the unit's paths with
+   `restic restore --include`. Only `pre-restore` safety snapshots are tagged per unit (`unit-<id>`).
+   §2.1 steps 5–6 (per-unit snapshots, quiesce) stay optional for adapters that need them.
 5. **Multi-repo fan-out** (KISS + second location via `restic copy`, HANDOVER §6) — does the adapter
    see one logical repo (engine hides fan-out)? Proposed: yes, adapters are repo-agnostic.
 6. **Contract versioning** — how the engine negotiates when an adapter speaks a newer minor. Proposed:
