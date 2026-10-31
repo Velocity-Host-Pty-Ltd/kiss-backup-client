@@ -41,12 +41,13 @@ set -o pipefail
 
 readonly SCRIPT_VERSION="1.2.3"
 readonly SCRIPT_NAME="vps_notify_v1.sh"
-readonly TAG="vps-notify"
+readonly TAG="kiss-notify"
 
+readonly KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 readonly TENANT_DIR="/var/log/tenant-management"
-readonly MAIL_ENV="/etc/vps-tooling/mail.env"
-readonly RESELLER_DIR="/etc/vps-tooling/resellers.d"
-readonly HOUSE_CONF="/etc/vps-tooling/house.conf"
+readonly MAIL_ENV="${MAIL_ENV:-$KBC_CONFIG_DIR/mail.env}"
+readonly RESELLER_DIR="${RESELLER_DIR:-$KBC_CONFIG_DIR/resellers.d}"
+readonly HOUSE_CONF="${HOUSE_CONF:-$KBC_CONFIG_DIR/house.conf}"
 readonly SENDMAIL="/usr/sbin/sendmail"
 
 readonly PREF_MAX_BYTES=65536

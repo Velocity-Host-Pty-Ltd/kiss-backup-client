@@ -65,9 +65,11 @@ backups_check_oncalendar: "Sun *-*-* 03:30:00"  # weekly structural integrity ch
 backups_prune_oncalendar: "Sun *-*-* 04:30:00"  # weekly disk reclaim (locks the repo)
 backups_randomized_delay: 1800                  # up to 30 min jitter (anti-thundering-herd)
 
-# Wire check failures to the service_watchdog alert template (a core foundation,
-# present fleet-wide). Set false to leave the check timer un-escalated.
-backups_alert_on_check_failure: true
+# Wire check failures to the service_watchdog alert template (a vps-baseline core
+# foundation). OFF by default for the standalone product — service_watchdog isn't present
+# off-platform, so OnFailure= + the recover helper stay out of the units entirely. A
+# vps-baseline deployment that has the watchdog can set this true to re-enable escalation.
+backups_alert_on_check_failure: false
 
 # Recovery (all-clear): when an alerting backup unit starts cleanly after a prior
 # failure, this helper emits the one-shot RECOVERED notice + clears the alert flag

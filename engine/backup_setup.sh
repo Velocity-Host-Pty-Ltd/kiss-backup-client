@@ -7,16 +7,15 @@
 # Summary: Interactive operator wizard that finishes backup onboarding after the
 #   welcome email: it preflights the per-VPS SFTP key (generated earlier by
 #   ssh_access_foundation), wires the KISS SSH alias + known_hosts, tests the
-#   connection, lets the operator opt in/out, persists the choice to host.yml,
+#   connection, lets the operator opt in/out, writes the backup config,
 #   renders the backup config, initialises the repo, SHOWS the repo passphrase with
 #   the break-glass escrow warning, then proves it with a first backup + restore
-#   drill. The scheduled timers activate on the next converge (via host.yml).
+#   drill. The scheduled systemd timers are enabled directly on this box.
 #
 # Purpose:
-#   The interactive front end to backups_foundation (engine/front-end split). It
-#   does NOT replace the role — it persists backups_enabled/backups_repo to
-#   /etc/vps-tooling/host.yml (so the converge keeps backups running + installs the
-#   timers) and runs the engine once now for immediate confirmation. Re-runnable.
+#   The interactive front end to the backup engine (engine/front-end split). On a
+#   standalone box it writes the backup config, enables the systemd timers directly, and
+#   runs the engine once now for immediate confirmation. Re-runnable.
 #   The SFTP ACCESS key is a foundation prerequisite (ssh_access_foundation); the
 #   repo PASSPHRASE (decryption) is generated here at init. Escrow policy is still
 #   owner-managed (handover §9 pending) — the wizard shows the passphrase + warns.
@@ -37,10 +36,13 @@ set -u
 KEY="${BACKUP_SSH_KEY:-/etc/restic/kiss_id_rsa}"
 SSH_CONFIG="${SSH_CONFIG:-/root/.ssh/config}"
 KNOWN_HOSTS="${KNOWN_HOSTS:-/root/.ssh/known_hosts}"
-HOST_YML="${HOST_YML:-/etc/vps-tooling/host.yml}"
-BASELINE="${BASELINE:-/var/lib/ansible/baseline}"
-ENGINE="${ENGINE:-/usr/local/bin/vps-tooling/restic_backup_v1.sh}"
-ENGINE_SRC="${ENGINE_SRC:-$BASELINE/vps-tooling/restic_backup_v1.sh}"
+# Standalone activation: the product installs its own engine + systemd units (no ansible
+# converge). ENGINE is the installed engine path; the INSTALL LAYOUT is still being
+# finalised, so it stays overridable. (Historically the wizard persisted opt-in to
+# vps-baseline's /etc/vps-tooling/host.yml for a converge to action, from a
+# /var/lib/ansible/baseline checkout — both dropped; see docs/EXTRACTION.md item 6.)
+ENGINE="${ENGINE:-/usr/local/lib/kiss-backup/restic_backup.sh}"
+UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 BACKUP_ENV="${BACKUP_ENV:-$KBC_CONFIG_DIR/backup.env}"
 
@@ -65,7 +67,7 @@ RESTIC_VERSION="${RESTIC_VERSION:-0.19.0}"
 # cache dir for every restic call here (matching the engines). Without it the background stats
 # scan dies, the cache never writes, and the console header stays blank.
 export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/restic}"
-NOTIFY_ENGINE="${NOTIFY_ENGINE:-/usr/local/bin/vps-tooling/vps_notify_v1.sh}"
+NOTIFY_ENGINE="${NOTIFY_ENGINE:-/usr/local/lib/kiss-backup/notify.sh}"
 # Default file coverage — MUST match backups_foundation's backups_paths default so
 # the interim env + the on-converge re-render agree. The engine skips absent paths.
 PATHS="${BACKUP_PATHS:-/home /etc /root /var/spool/cron /usr/local/lsws/conf}"
@@ -161,7 +163,7 @@ cmd_refresh_stats() {
 cmd_status() {
     [ "$(id -u)" -eq 0 ] || die "run as root"
     hr; say "Velocity Host — backup status"; hr
-    if ! grep -q '^backups_enabled:[[:space:]]*true' "$HOST_YML" 2>/dev/null; then
+    if ! grep -q '^BACKUP_ENABLED="true"' "$BACKUP_ENV" 2>/dev/null; then
         say "Backups: NOT configured on this box."
         say "Set them up with:  $0"
         return 0
@@ -174,7 +176,7 @@ cmd_status() {
     say "Repository:  ${repo}"
     say "Files:       ${paths}"
     say "             (engine skips any path not present on this box)"
-    if grep -q '^backups_db_enabled:[[:space:]]*true' "$HOST_YML" 2>/dev/null; then
+    if grep -q '^BACKUP_DB_ENABLED="true"' "$BACKUP_ENV" 2>/dev/null; then
         say "Databases:   nightly full + hourly differential (local) + daily per-DB dump (offsite)"
     else
         say "Databases:   not enabled"
@@ -185,7 +187,7 @@ cmd_status() {
     say ""
     say "Schedule (systemd timers):"
     systemctl list-timers 'kiss-backup*' --all --no-pager 2>/dev/null | sed 's/^/  /' \
-        || say "  (timers install on the next converge)"
+        || say "  (no timers found — re-run this wizard to enable them)"
     say ""
     say "Most recent backups in the repo:"
     if [ -x "$ENGINE" ] && [ -s "$BACKUP_ENV" ]; then
@@ -222,7 +224,7 @@ say "repo, show your break-glass passphrase, and verify with a test backup + res
 say ""
 
 # Preflight: the per-VPS SFTP key must exist (ssh_access_foundation makes it).
-[ -s "${KEY}.pub" ] || die "no backup key at ${KEY}.pub — converge first (ssh_access_foundation generates it)."
+[ -s "${KEY}.pub" ] || die "no backup key at ${KEY}.pub — create it first (ssh_access_foundation generates it)."
 ALIAS="${KISS_ALIAS}"
 
 # Connection — reuse a working alias if there is one; otherwise set it up. Testing
@@ -297,30 +299,15 @@ if ! yes "Enable offsite backups on this box?" "y/N"; then
 fi
 DB="false"; if yes "Also enable database backups (mariabackup + per-DB dumps)?" "Y/n"; then DB="true"; fi
 
-# Persist the opt-in to host.yml (managed block; the converge reads this).
-install -d -m 0755 "$(dirname "$HOST_YML")"
-touch "$HOST_YML"
-tmp="$(mktemp)"
-sed '/^# >>> backup-setup >>>$/,/^# <<< backup-setup <<<$/d' "$HOST_YML" > "$tmp"
-{
-    cat "$tmp"
-    printf '# >>> backup-setup >>>\n'
-    printf 'backups_enabled: true\n'
-    printf 'backups_db_enabled: %s\n' "$DB"
-    printf 'backups_repo: "%s"\n' "$REPO"
-    printf '# <<< backup-setup <<<\n'
-} > "$HOST_YML"
-rm -f "$tmp"
-say "Saved backups_enabled/backups_repo to ${HOST_YML} (converge keeps it running + installs timers)."
-
-# Render config + deploy engine for immediate use (the role re-renders these
-#    authoritatively on the next converge; identical content).
-install -d -m 0755 "$(dirname "$ENGINE")" "$(dirname "$BACKUP_ENV")"
+# Write the backup config — also the persisted opt-in (BACKUP_ENABLED/BACKUP_DB_ENABLED),
+# which `status` reads. The engine sources this file; it ignores the two flags.
+install -d -m 0755 "$(dirname "$BACKUP_ENV")"
 install -d -m 0700 "$(dirname "$PASSFILE")"
-[ -x "$ENGINE" ] || { [ -s "$ENGINE_SRC" ] && install -m 0750 "$ENGINE_SRC" "$ENGINE"; }
-[ -x "$ENGINE" ] || die "backup engine not found ($ENGINE / $ENGINE_SRC)"
+[ -x "$ENGINE" ] || die "backup engine not found at ${ENGINE} — install kiss-backup first."
 {
-    printf '# backup-setup (interim; backups_foundation re-renders on converge)\n'
+    printf '# backup-setup (written by backup_setup.sh; re-run the wizard to change)\n'
+    printf 'BACKUP_ENABLED="true"\n'
+    printf 'BACKUP_DB_ENABLED="%s"\n' "$DB"
     printf 'BACKUP_REPO="%s"\n' "$REPO"
     printf 'BACKUP_PASSFILE="%s"\n' "$PASSFILE"
     printf 'BACKUP_PATHS="%s"\n' "$PATHS"
@@ -387,6 +374,28 @@ else
     rm -rf "$vd"
     die "verification failed — backups are NOT working yet (see output above)."
 fi
+
+# Activate the schedule — enable the systemd timers directly (standalone: no converge
+# does it). Only AFTER the verify, so no timer fires against an unproven repo. Each
+# unit must already be installed in $UNIT_DIR; a missing core timer is fatal (backups
+# would silently never run), a missing optional one (drill) is skipped.
+say ""; say "Enabling the backup schedule ..."
+core="kiss-backup.timer kiss-backup-check.timer kiss-backup-prune.timer"
+dbt="kiss-backup-db-full.timer kiss-backup-db-diff.timer kiss-backup-db-dump.timer"
+want="$core"; [ "$DB" = "true" ] && want="$want $dbt"
+for t in $want; do
+    [ -f "${UNIT_DIR}/${t}" ] || die "timer unit ${UNIT_DIR}/${t} not installed — install kiss-backup first."
+done
+[ -f "${UNIT_DIR}/kiss-backup-drill.timer" ] && want="$want kiss-backup-drill.timer"
+systemctl daemon-reload
+# shellcheck disable=SC2086  # word-split the unit list on purpose
+systemctl enable --now $want >/dev/null 2>&1 || die "could not enable timers: ${want}"
+if [ "$DB" != "true" ]; then
+    for t in $dbt; do  # DB opted out on a re-run — stop any previously enabled DB timers
+        systemctl disable --now "$t" >/dev/null 2>&1 || true
+    done
+fi
+say "  ✓ timers enabled: ${want}"
 
 # Set expectations BEFORE anything heavy runs, and leave the choice with the operator.
 say ""; hr
