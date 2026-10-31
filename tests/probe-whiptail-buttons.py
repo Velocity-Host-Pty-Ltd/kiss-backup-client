@@ -61,7 +61,8 @@ def bg_before(screen, word):
 
 name = {v: k for k, v in MARKERS.items()}
 print("newt:", subprocess.run(["sh", "-c", "rpm -q newt 2>/dev/null || dpkg-query -W -f='${Version}' libnewt0.52 2>/dev/null"],
-                              capture_output=True, text=True).stdout.strip() or "unknown")
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              universal_newlines=True).stdout.strip() or "unknown")   # py3.6 (EL8)
 
 screen, rc = run(MARK_ENV, 2)          # focus on Cancel; Ok is redrawn unfocused
 focused, unfocused = bg_before(screen, "Cancel"), bg_before(screen, "Ok")
