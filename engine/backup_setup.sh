@@ -370,7 +370,9 @@ say ""; say "Installing restic ..."
 # New repo, or RECONNECTING to an existing one you hold the passphrase for (disaster
 # recovery / re-pointing a rebuilt box)? For "existing", seed + verify the passphrase
 # BEFORE init so init adopts the repo; for "new", init generates a fresh passphrase.
+RECONNECT=0
 if yes "Reconnecting to an EXISTING repo you have the passphrase for?" "y/N"; then
+    RECONNECT=1
     say "Paste the existing repo passphrase (input hidden):"
     IFS= read -r -s existing_pass; echo
     [ -n "$existing_pass" ] || die "no passphrase entered."
@@ -394,17 +396,23 @@ if ! "$ENGINE" init; then
     die "repo init failed"
 fi
 
-# Show the passphrase + the break-glass escrow warning.
-say ""; hr
-say "REPO PASSPHRASE — SAVE THIS TO YOUR PASSWORD MANAGER NOW"
-hr
-[ -s "$PASSFILE" ] && cat "$PASSFILE"
-hr
-say "This is the ONLY key that can DECRYPT the offsite backups. It lives on this"
-say "box at ${PASSFILE}, but if the box is ever lost, that copy goes with it — the"
-say "escrowed copy in your password manager is then the only way to restore."
-say "Losing it = the backups are permanently unrecoverable."
-hr
+# Show the passphrase + the break-glass escrow warning — only for a NEW repo. On a
+# reconnect the operator just typed it, so printing it again only leaves it in the
+# terminal scrollback.
+if [ "$RECONNECT" = 1 ]; then
+    say ""; say "Using your existing repo passphrase (stored at ${PASSFILE}; not shown again)."
+else
+    say ""; hr
+    say "REPO PASSPHRASE — SAVE THIS TO YOUR PASSWORD MANAGER NOW"
+    hr
+    [ -s "$PASSFILE" ] && cat "$PASSFILE"
+    hr
+    say "This is the ONLY key that can DECRYPT the offsite backups. It lives on this"
+    say "box at ${PASSFILE}, but if the box is ever lost, that copy goes with it — the"
+    say "escrowed copy in your password manager is then the only way to restore."
+    say "Losing it = the backups are permanently unrecoverable."
+    hr
+fi
 
 # Verify with a SMALL round-trip (a few KB) — proves the repo accepts a backup and
 # restores it, WITHOUT starting the full dataset backup. Fast, non-blocking.
