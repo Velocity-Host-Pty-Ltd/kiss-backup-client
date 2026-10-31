@@ -401,7 +401,7 @@ cmd_prune() {
     run_exclusive prune prune
 }
 
-cmd_snapshots() { restic_plain snapshots; }
+cmd_snapshots() { restic_plain snapshots "$@"; }
 
 # mariabackup physical chain — LOCAL ONLY, deliberately NOT shipped to restic.
 # WHOLE-INSTANCE (all databases, page-level): mariabackup chains are instance-level

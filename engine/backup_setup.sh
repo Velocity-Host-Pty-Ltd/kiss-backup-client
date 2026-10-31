@@ -194,7 +194,7 @@ cmd_status() {
     say ""
     say "Most recent backups in the repo:"
     if [ -x "$ENGINE" ] && [ -s "$BACKUP_ENV" ]; then
-        "$ENGINE" snapshots 2>/dev/null | tail -6 | sed 's/^/  /' || say "  (repo not reachable right now)"
+        "$ENGINE" snapshots --compact 2>/dev/null | tail -8 | sed 's/^/  /' || say "  (repo not reachable right now)"
     fi
     # Repo stats are read from the CACHE (the live restic scan is slow on a large/remote
     # repo, so it never runs interactively). A stale/absent cache is refreshed in the
