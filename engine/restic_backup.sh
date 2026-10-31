@@ -37,20 +37,21 @@
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh snapshots
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh check --read-data-subset=5%
 #
-# Config: sourced from $BACKUP_ENV (default /etc/vps-tooling/backup.env), rendered
-#   by the role. Run as: root (from systemd units). Exit non-zero on failure so the
+# Config: sourced from $BACKUP_ENV (default $KBC_CONFIG_DIR/backup.env, i.e.
+#   /etc/kiss-backup/backup.env). Run as: root (from systemd units). Exit non-zero on failure so the
 #   watchdog/notification framework can route it.
 #
 set -u
 
-readonly BACKUP_ENV="${BACKUP_ENV:-/etc/vps-tooling/backup.env}"
+readonly KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
+readonly BACKUP_ENV="${BACKUP_ENV:-$KBC_CONFIG_DIR/backup.env}"
 readonly TAG="vps-backup"
 
 log()  { logger -t "$TAG" -- "$*" 2>/dev/null || true; printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 die()  { log "FATAL: $*"; exit 1; }
 
 # Help must work on ANY box, before the config is even required — short-circuit
-# here (the config block below would otherwise die without /etc/vps-tooling/backup.env).
+# here (the config block below would otherwise die without $BACKUP_ENV).
 case "${1:-}" in
     -h|--help|help) sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
@@ -153,7 +154,7 @@ readonly -a REDUNDANT_EXCLUDES=(
 # the account name so one line templates across all accounts, e.g.
 #   /home/*/public_html/wp-content/my-custom-backups
 # Screened by is_dangerous_exclude() before every backup — see safe_exclude_patterns.
-BACKUP_EXCLUDE_FILE="${BACKUP_EXCLUDE_FILE:-/etc/vps-tooling/backup-excludes.conf}"
+BACKUP_EXCLUDE_FILE="${BACKUP_EXCLUDE_FILE:-$KBC_CONFIG_DIR/backup-excludes.conf}"
 
 export RESTIC_PASSWORD_FILE="$BACKUP_PASSFILE"
 

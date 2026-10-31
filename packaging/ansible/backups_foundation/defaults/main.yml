@@ -26,7 +26,7 @@ backups_engine_path: /usr/local/bin/vps-tooling/restic_backup_v1.sh
 backups_ondemand_engine_path: /usr/local/bin/vps-tooling/backup_ondemand_v1.sh
 # Guided whiptail backup/restore front-end (launched from vps-console).
 backups_restore_frontend_path: /usr/local/bin/vps-tooling/backup_restore_v1.sh
-backups_env_path: /etc/vps-tooling/backup.env
+backups_env_path: /etc/kiss-backup/backup.env
 
 # --- restic binary (pinned + SHA-verified; handover re-validation = >=0.19) ---
 backups_restic_bin: /usr/local/bin/restic
@@ -45,7 +45,7 @@ backups_passfile: /etc/restic/backup.pass    # generated on first run if absent 
 # DB datadir /var/lib/mysql is excluded by the engine — the DB slice handles DBs.
 backups_paths: "/home /etc /root /var/spool/cron /usr/local/lsws/conf"
 backups_excludes: ""                          # extra space-separated exclude patterns (role-set)
-backups_exclude_file: /etc/vps-tooling/backup-excludes.conf   # operator-editable list (created once, never clobbered)
+backups_exclude_file: /etc/kiss-backup/backup-excludes.conf   # operator-editable list (created once, never clobbered)
 backups_tag: "{{ ansible_hostname }}"
 
 # --- resource caps (so a backup can never starve tenant sites) ---

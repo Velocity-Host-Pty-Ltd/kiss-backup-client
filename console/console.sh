@@ -25,7 +25,8 @@
 #
 set -u
 
-CONSOLE_D="${VPS_CONSOLE_D:-/etc/vps-tooling/console.d}"
+KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
+CONSOLE_D="${KBC_CONSOLE_D:-$KBC_CONFIG_DIR/console.d}"
 BRAND="Velocity Host — Operator Console"
 TENANT_DIR="${TENANT_DIR:-/var/log/tenant-management}"
 STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/vps-backups/repo-stats}"

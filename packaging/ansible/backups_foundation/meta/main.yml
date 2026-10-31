@@ -3,7 +3,7 @@ galaxy_info:
   role_name: backups_foundation
   author: Velocity Host
   description: restic backup engine + timers (nightly backup, weekly check + prune); one repo per VPS, SFTP. Opt-in.
-  license: proprietary
+  license: AGPL-3.0-only
   min_ansible_version: "2.11"
   platforms:
     - name: EL

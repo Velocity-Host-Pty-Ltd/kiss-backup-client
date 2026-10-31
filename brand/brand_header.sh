@@ -43,7 +43,8 @@
 set -euo pipefail
 
 readonly MOTD_FILE="${MOTD_FILE:-/etc/motd}"
-readonly MOTD_EXTRA_DIR="${MOTD_EXTRA_DIR:-/etc/vps-tooling/motd.d}"   # MOTD-only "you are here" board drop-ins
+readonly KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
+readonly MOTD_EXTRA_DIR="${MOTD_EXTRA_DIR:-$KBC_CONFIG_DIR/motd.d}"   # MOTD-only "you are here" board drop-ins
 
 # --- Brand palette (sampled from the logo) -----------------------------------
 ESC=$'\033'
