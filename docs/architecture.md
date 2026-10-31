@@ -231,23 +231,49 @@ anything under `adapters/`; it only *execs* the configured adapter through the c
 
 ---
 
-## 4. Proposed repo layout
+## 4. Repo layout & conventions
+
+### 4.1 Layout
 
 ```
-engine/        # Layer 1: restic scheduler, db dumps, retention, restore, pkg-install abstraction
-console/       # Layer 1 TUI (generic menu launcher + backup menu drop-ins)
-adapters/
-  generic-dir/ # reference adapter: named path groups from a config file (no panel)
-  directadmin/ # first real Layer-2 adapter
-  velocity/    # the old tenant-ledger logic, moved behind the contract (Layer 2)
-  smartermail/ # Layer-3 app adapter (item-restore)
-packaging/     # release tarball now; rpm/deb later (HANDOVER §7)
-tests/         # ported verify-* scripts + a contract conformance harness (§5)
-docs/
-  HANDOVER.md
-  architecture.md   # this file
-brand/         # brand.conf + reseller override (HANDOVER §5)
+engine/              # Layer 1: restic scheduler, db dumps, retention, restore, pkg-install abstraction
+  restic_backup.sh   #   the scheduled backup engine
+  backup_setup.sh    #   opt-in setup wizard (writes the config; being decoupled)
+  notify.sh          #   notifications (mail/webhook; non-fatal)
+console/             # Layer 1 TUI
+  console.sh         #   generic menu launcher (reads console.d/*.menu, evals commands)
+  console.d/         #   backup menu descriptors (30/35/40-backup*)
+adapters/            # Layer 2 + 3 — ONE SUBFOLDER PER MODULE (see 4.3). Reference/first adapters:
+  generic-dir/       #   reference adapter: named path groups from a config file (no panel)
+  directadmin/       #   first real Layer-2 adapter
+  velocity/          #   the old tenant-ledger logic, moved behind the contract (Layer 2)
+  smartermail/       #   Layer-3 app adapter (item-restore)
+brand/               # brand_header.sh + brand.conf (Velocity defaults) + reseller override (HANDOVER §5)
+packaging/           # installer + release packaging
+  ansible/           #   backups_foundation role (reference for the standalone installer)
+tests/               # ported verify-* scripts + the contract conformance harness (§5)
+docs/                # HANDOVER.md, architecture.md (this file), EXTRACTION.md (decoupling checklist)
 ```
+
+### 4.2 Config convention (decided)
+
+- **Config root = `/etc/kiss-backup/`** for a fresh standalone install — a clean break from the
+  inherited `/etc/vps-tooling/`. Primary config file: `/etc/kiss-backup/backup.env`.
+- **The config root is a single parameter**, read from `KBC_CONFIG_DIR` (default `/etc/kiss-backup`).
+  A consumer may override it: e.g. `vps-baseline`, when it adopts the product, can point the engine
+  at its existing `/etc/vps-tooling/backup.env` for a **zero-migration** adoption, or migrate on a
+  maintenance window. Our choice of default never forces a change on a live fleet — the dependency
+  is one-way and version-pinned (HANDOVER §2).
+- **Namespacing to avoid collisions:** the product ships its own systemd unit names (`kiss-backup-*`)
+  and its own `console.d` dir, so it can coexist with a legacy `vps-tooling` install during a
+  transition.
+- Env-var prefix for runtime/engine variables is **`KBC_`** (see §1.5).
+
+### 4.3 Module = subfolder (decided)
+
+Every Layer-2/3 module lives in its **own subfolder** under `adapters/`, never as a single loose
+file. A folder gives each module room for helper libs, its own tests, and a config template without
+cluttering the parent tree, and it matches the discovery rule in §1.6 (`adapters/<name>/adapter`).
 
 ---
 
