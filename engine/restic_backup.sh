@@ -642,7 +642,7 @@ cmd_restore_unit() {
 
     # What belongs to the unit (adapter), narrowed by --only to one sub-path.
     local -a paths=() dbs=()
-    local p db f r root=""
+    local p db f r later root=""
     if [ "$do_files" -eq 1 ]; then
         while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done < <("$ad" paths-for-unit "$unit") \
             || die "paths-for-unit $unit failed"
@@ -721,7 +721,12 @@ cmd_restore_unit() {
             || die "staging DB dumps from $dsnap failed (workdir kept: $wd)"
         for db in "${dbs[@]}"; do
             if [ -s "$wd/dbraw$DB_DUMP_DIR/$db.sql" ]; then mv "$wd/dbraw$DB_DUMP_DIR/$db.sql" "$wd/dbs/"
-            else log "WARN: no dump of $db in $dsnap (created after it?) — left as is"; fi
+            else
+                log "WARN: no dump of $db in $dsnap (created after it?) — left as is"
+                later="$(restic_plain snapshots --compact --tag db-dump 2>/dev/null \
+                    | awk -v t="${drow#*$'\t'}" '/^[0-9a-f]{8} /{ if ($2" "$3 > t) printf "%s (%s %s)  ", $1, $2, $3 }')"
+                [ -n "$later" ] && log "      newer DB dumps: $later— pick one with --db-snapshot <id>"
+            fi
         done
         rm -rf "$wd/dbraw"
     fi
