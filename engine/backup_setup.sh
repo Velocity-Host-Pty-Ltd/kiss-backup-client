@@ -223,8 +223,21 @@ say "Finishes offsite backup onboarding: connect to KISS, opt in, initialise the
 say "repo, show your break-glass passphrase, and verify with a test backup + restore."
 say ""
 
-# Preflight: the per-VPS SFTP key must exist (ssh_access_foundation makes it).
-[ -s "${KEY}.pub" ] || die "no backup key at ${KEY}.pub — create it first (ssh_access_foundation generates it)."
+# Preflight: the per-VPS SFTP key. On vps-baseline ssh_access_foundation generates it
+# early; a standalone box has nothing that does, so create it here when absent (never
+# replace an existing key — KISS may already have it authorised). RSA to match the
+# kiss_id_rsa name the platform uses; OpenSSH signs with rsa-sha2-*, so EL9's SHA-1 ban
+# doesn't bite.
+if [ ! -s "$KEY" ]; then
+    command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen not found (install openssh-clients / openssh-client)."
+    install -d -m 0700 "$(dirname "$KEY")"
+    ssh-keygen -q -t rsa -b 4096 -N '' -C "kiss-backup@$(hostname -f 2>/dev/null || hostname)" -f "$KEY" \
+        || die "could not generate the backup key at ${KEY}"
+    say "Generated a new backup SSH key at ${KEY}."
+elif [ ! -s "${KEY}.pub" ]; then
+    ssh-keygen -y -f "$KEY" > "${KEY}.pub" || die "could not derive ${KEY}.pub from ${KEY}"
+fi
+chmod 0600 "$KEY"
 ALIAS="${KISS_ALIAS}"
 
 # Connection — reuse a working alias if there is one; otherwise set it up. Testing
