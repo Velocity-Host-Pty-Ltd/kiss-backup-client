@@ -159,8 +159,11 @@ render_block() {
 host_line() {
   local h ed
   h="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo '?')"
-  ed="$(cldetect --detect-edition 2>/dev/null || true)"
-  if [[ -z "${ed}" ]]; then
+  # CloudLinux edition is optional (CL-only); only probe if cldetect is present.
+  if command -v cldetect >/dev/null 2>&1; then
+    ed="$(cldetect --detect-edition 2>/dev/null || true)"
+  fi
+  if [[ -z "${ed:-}" ]]; then
     # shellcheck disable=SC1091
     ed="$( . /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-Linux}" )"
     [[ -n "${ed}" ]] || ed="Linux"

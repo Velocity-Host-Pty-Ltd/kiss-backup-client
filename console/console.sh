@@ -71,7 +71,13 @@ gather_status() {
     local host ip edition web up load accts btimer repo
     host="$(hostname -f 2>/dev/null || hostname 2>/dev/null)"
     ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    edition="$(cldetect --detect-edition 2>/dev/null | head -n1)"
+    # CloudLinux edition is an OPTIONAL enhancement (CL-only). Off CloudLinux (e.g. a
+    # DirectAdmin box on AlmaLinux/Debian) cldetect is absent — fall back to the OS name
+    # so the field is still meaningful rather than blank.
+    if command -v cldetect >/dev/null 2>&1; then
+        edition="$(cldetect --detect-edition 2>/dev/null | head -n1)"
+    fi
+    [ -n "${edition:-}" ] || edition="$( . /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-}" )"
     if   systemctl is-active --quiet lsws  2>/dev/null; then web="LiteSpeed"
     elif systemctl is-active --quiet httpd 2>/dev/null; then web="Apache"
     else web="(none active)"; fi
