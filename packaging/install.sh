@@ -145,9 +145,14 @@ do_install() {
     systemctl daemon-reload
 
     say ""
-    say "Installed. Timers are NOT enabled yet — the setup wizard enables them after it"
-    say "connects to your repo and verifies a test backup + restore. Next:"
-    say "    kiss-backup-setup"
+    if systemctl is-enabled --quiet kiss-backup.timer 2>/dev/null; then
+        say "Upgraded. Backups were already configured — the timers stay enabled and pick up"
+        say "the new code on their next run. Check with:  kiss-backup-setup status"
+    else
+        say "Installed. Timers are NOT enabled yet — the setup wizard enables them after it"
+        say "connects to your repo and verifies a test backup + restore. Next:"
+        say "    kiss-backup-setup"
+    fi
 }
 
 case "${1:-}" in

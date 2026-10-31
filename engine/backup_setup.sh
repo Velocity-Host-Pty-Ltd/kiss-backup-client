@@ -85,6 +85,9 @@ hr()   { printf -- '------------------------------------------------------------
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 ask()  { local p="$1" d="$2" a; read -r -p "$p [$d]: " a; printf '%s' "${a:-$d}"; }
 yes()  { local p="$1" d="$2" a; read -r -p "$p ($d): " a; a="${a:-$d}"; case "$a" in [Yy]*) return 0 ;; *) return 1 ;; esac; }
+# The configured backup paths that exist on this box, one per line — the engine skips
+# the rest, so listing them would only mislead (and wrap badly).
+present_paths() { local p; for p in $1; do [ -e "$p" ] && printf '%s\n' "$p"; done; }
 
 usage() { sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -175,8 +178,7 @@ cmd_status() {
     say "Backups:     ENABLED"
     say "Protection:  AES-256 encrypted · zstd-compressed · deduplicated · immutable offsite"
     say "Repository:  ${repo}"
-    say "Files:       ${paths}"
-    say "             (engine skips any path not present on this box)"
+    present_paths "$paths" | sed '1s/^/Files:       /; 2,$s/^/             /'
     if grep -q '^BACKUP_DB_ENABLED="true"' "$BACKUP_ENV" 2>/dev/null; then
         say "Databases:   nightly full + hourly differential (local) + daily per-DB dump (offsite)"
     else
@@ -459,10 +461,8 @@ say "A full backup runs automatically every HOUR — restic only ships what chan
 say "so after the first (full) run each one is tiny. The first scheduled run starts"
 say "at the top of the next hour (plus up to 30 min of jitter). The most recent 24 are"
 say "kept hour-by-hour (rolling 24h), then thinned to daily/weekly/monthly. The file"
-say "backup covers:"
-say "    ${PATHS}"
-say "  (site data, system + web-server configs, crontabs, certificates; the engine"
-say "   skips any path not present on this box)."
+say "backup covers (site data, system + web-server configs, crontabs, certificates):"
+present_paths "$PATHS" | sed 's/^/    /'
 if [ "$DB" = "true" ]; then
     say "Databases: nightly full + hourly differential (local) + a daily per-DB dump (offsite)."
 else
@@ -510,7 +510,7 @@ if [ -x "$NOTIFY_ENGINE" ]; then
         printf '  %-11s %s\n\n' 'Verify'     'PASSED — small write + restore round-trip'
         printf '  %-11s %s\n\n' 'Protection' 'AES-256 · zstd · deduplicated · immutable offsite'
         printf '  %-11s %s\n\n' 'Repository' "$REPO"
-        printf '  %-11s %s\n'   'Files'      "$PATHS"
+        present_paths "$PATHS" | sed '1s/^/  Files       /; 2,$s/^/              /'
         printf '  %-11s %s\n\n' ''           '(site data, configs, crontabs, certificates)'
         printf '  %-11s %s\n\n' 'Databases'  "$db_line"
         printf '  %-11s %s\n\n' 'Schedule'   'a full backup every HOUR (incremental — tiny after #1)'
