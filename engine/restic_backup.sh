@@ -117,6 +117,9 @@ DRILL_CURSOR="$DRILL_SCRATCH/.cursor"
 ADAPTER="${ADAPTER:-}"
 ADAPTER_DIR="${KBC_ADAPTER_DIR:-/usr/local/lib/kiss-backup/adapters}"
 RESTORE_ROOT="${BACKUP_RESTORE_ROOT:-/var/lib/kiss-backups/restore}"
+# A DB dump taken up to this many seconds AFTER a file snapshot is its pair (the backup and
+# db-dump services run back to back); outside it, restore-unit uses the newest dump before.
+DB_PAIR_WINDOW="${BACKUP_DB_PAIR_WINDOW:-900}"
 
 [ -n "${BACKUP_REPO:-}" ] || die "BACKUP_REPO unset in $BACKUP_ENV"
 
@@ -677,7 +680,7 @@ cmd_restore_unit() {
     [ "$do_files" -eq 1 ] || [ "$do_dbs" -eq 1 ] || die "nothing to restore for $unit"
 
     # Which snapshots: the file snapshot (latest that holds the unit's root, or --snapshot)
-    # and the newest db-dump at or before it (or --db-snapshot).
+    # and the db-dump paired with it (or --db-snapshot).
     local frow="" drow="" ftime=""
     if [ "$do_files" -eq 1 ] || [ -z "$dsnap" ]; then
         # The unit's root picks the file snapshots; with --dbs-only there's none, so use
@@ -691,14 +694,25 @@ cmd_restore_unit() {
         if [ -n "$dsnap" ]; then
             drow="$(snap_row "$dsnap")"
         else
-            # Newest dump at or before the file snapshot; if there's none (e.g. a fresh
-            # box whose first dump came after it), the closest one after — and say so.
-            drow="$(restic_plain snapshots --compact --tag db-dump 2>/dev/null \
-                | awk -v t="$ftime" '/^[0-9a-f]{8} /{ ts=$2" "$3
-                      if (ts <= t) { b=$1; bt=ts } else if (!a) { a=$1; at=ts } }
-                  END { if (b) print b"\t"bt; else if (a) print a"\t"at"\tafter" }')"
-            case "$drow" in *$'\t'after) drow="${drow%$'\t'after}"
-                log "WARN: no DB dump at or before $ftime — using the next one, ${drow#*$'\t'}" ;; esac
+            # The dump paired with the file snapshot: the first one within DB_PAIR_WINDOW
+            # after it (taken back to back), else the newest at or before it, else (a fresh
+            # box) the closest after it — and say so.
+            local fts id d t ts after="" before="" pair=""
+            fts="$(date -d "$ftime" +%s 2>/dev/null)" || die "cannot parse snapshot time $ftime"
+            while read -r id d t _; do
+                [[ "$id" =~ ^[0-9a-f]{8}$ ]] || continue
+                ts="$(date -d "$d $t" +%s 2>/dev/null)" || continue
+                if [ "$ts" -le "$fts" ]; then before="$id"$'\t'"$d $t"
+                elif [ -z "$after" ]; then
+                    after="$id"$'\t'"$d $t"
+                    [ $((ts - fts)) -le "$DB_PAIR_WINDOW" ] && pair="$after"
+                fi
+            done < <(restic_plain snapshots --compact --tag db-dump 2>/dev/null)
+            if [ -n "$pair" ]; then drow="$pair"
+            elif [ -n "$before" ]; then drow="$before"
+            elif [ -n "$after" ]; then drow="$after"
+                log "WARN: no DB dump at or before $ftime — using the next one, ${after#*$'\t'}"
+            fi
         fi
         [ -n "$drow" ] || die "no db-dump snapshot found — use --db-snapshot or --files-only"
         dsnap="${drow%%$'\t'*}"

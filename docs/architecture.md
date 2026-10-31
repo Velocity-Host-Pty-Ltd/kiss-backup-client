@@ -217,8 +217,9 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
 1. **Plan.** `list-units` must contain the unit; `paths-for-unit` / `dbs-for-unit` say what
    belongs to it. `--only` narrows the files to one sub-path (must be inside the unit's paths);
    paths not under any `BACKUP_PATHS` root are reported and skipped. Snapshots: the file snapshot
-   is the latest that holds the unit's root (or `--snapshot`); the DB snapshot is the newest
-   `db-dump` at or before it, else the closest after it with a warning (or `--db-snapshot`).
+   is the latest that holds the unit's root (or `--snapshot`); the DB snapshot is the `db-dump`
+   taken within `BACKUP_DB_PAIR_WINDOW` (default 900 s) after it — the two run back to back —
+   else the newest at or before it, else the closest after it with a warning (or `--db-snapshot`).
    **Without `--yes` (or `--dry-run`) the engine prints the plan and changes nothing** — the
    console confirms, the CLI must opt in.
 2. **Stage** into `$BACKUP_RESTORE_ROOT/<unit>.XXXXXX` (default `/var/lib/kiss-backups/restore`):
