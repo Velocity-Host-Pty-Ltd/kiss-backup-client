@@ -217,7 +217,9 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
 ## 3. Layer model (recap, see HANDOVER §3)
 
 - **Layer 1 — generic engine + console.** restic scheduling, MariaDB-aware dumps, retention,
-  drills, restore, TUI. Owns the **dnf+apt package-install abstraction**. Knows the adapter contract;
+  drills, restore, TUI. **Auto-detects the OS / package family at runtime** (`/etc/os-release` →
+  dnf vs apt) and owns the **dnf+apt package-install abstraction** — the target OS is never a
+  build-time or install-time assumption the operator has to supply. Knows the adapter contract;
   knows no panel. Extracted from the CLEAN files in HANDOVER §4.
 - **Layer 2 — control-panel adapters.** One active per run. DirectAdmin first; cPanel/Plesk/Velocity
   later. This is where the old tenant-ledger coupling is quarantined.
