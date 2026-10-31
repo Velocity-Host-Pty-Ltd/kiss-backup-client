@@ -194,7 +194,9 @@ cmd_status() {
     say ""
     say "Most recent backups in the repo:"
     if [ -x "$ENGINE" ] && [ -s "$BACKUP_ENV" ]; then
-        "$ENGINE" snapshots --compact 2>/dev/null | tail -8 | sed 's/^/  /' || say "  (repo not reachable right now)"
+        # --compact still wraps extra tags onto indented continuation lines; drop them so
+        # each snapshot is one row (the first tag still shows).
+        "$ENGINE" snapshots --compact 2>/dev/null | grep -v '^[[:space:]]' | tail -8 | sed 's/^/  /' || say "  (repo not reachable right now)"
     fi
     # Repo stats are read from the CACHE (the live restic scan is slow on a large/remote
     # repo, so it never runs interactively). A stale/absent cache is refreshed in the
