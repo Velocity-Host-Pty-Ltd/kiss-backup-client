@@ -4,7 +4,7 @@
 # (scratch + a throwaway temp DB, dropped). PINNED to 1 CPU + idle IO so it can
 # never starve tenant sites even mid-import; failure routes to the notifier.
 [Unit]
-Description=vps-baseline restic restore-drill (verify backups restore)
+Description=KISS Backup restore-drill (verify backups restore)
 After=network-online.target mariadb.service
 Wants=network-online.target
 {% if backups_alert_on_check_failure | bool %}

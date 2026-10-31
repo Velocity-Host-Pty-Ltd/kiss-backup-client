@@ -131,12 +131,12 @@
         group: root
         mode: "0644"
       loop:
-        - restic-backup.service
-        - restic-backup.timer
-        - restic-check.service
-        - restic-check.timer
-        - restic-prune.service
-        - restic-prune.timer
+        - kiss-backup.service
+        - kiss-backup.timer
+        - kiss-backup-check.service
+        - kiss-backup-check.timer
+        - kiss-backup-prune.service
+        - kiss-backup-prune.timer
       notify: Reload systemd daemon
 
     - name: Enable + start the backup, check and prune timers
@@ -146,9 +146,9 @@
         state: started
         daemon_reload: true
       loop:
-        - restic-backup.timer
-        - restic-check.timer
-        - restic-prune.timer
+        - kiss-backup.timer
+        - kiss-backup-check.timer
+        - kiss-backup-prune.timer
 
     - name: Configure the DB slice (mariabackup chain + per-tenant dumps)
       when: backups_db_enabled | bool
@@ -173,12 +173,12 @@
             group: root
             mode: "0644"
           loop:
-            - restic-db-full.service
-            - restic-db-full.timer
-            - restic-db-diff.service
-            - restic-db-diff.timer
-            - restic-db-dump.service
-            - restic-db-dump.timer
+            - kiss-backup-db-full.service
+            - kiss-backup-db-full.timer
+            - kiss-backup-db-diff.service
+            - kiss-backup-db-diff.timer
+            - kiss-backup-db-dump.service
+            - kiss-backup-db-dump.timer
           notify: Reload systemd daemon
 
         - name: Enable + start the DB timers
@@ -188,9 +188,9 @@
             state: started
             daemon_reload: true
           loop:
-            - restic-db-full.timer
-            - restic-db-diff.timer
-            - restic-db-dump.timer
+            - kiss-backup-db-full.timer
+            - kiss-backup-db-diff.timer
+            - kiss-backup-db-dump.timer
 
     - name: Configure the restore-drill (verify backups actually restore)
       when: backups_drill_enabled | bool
@@ -204,13 +204,13 @@
             group: root
             mode: "0644"
           loop:
-            - restic-drill.service
-            - restic-drill.timer
+            - kiss-backup-drill.service
+            - kiss-backup-drill.timer
           notify: Reload systemd daemon
 
         - name: Enable + start the restore-drill timer
           ansible.builtin.systemd:
-            name: restic-drill.timer
+            name: kiss-backup-drill.timer
             enabled: true
             state: started
             daemon_reload: true
@@ -225,7 +225,7 @@
     - name: Find any installed restic units
       ansible.builtin.find:
         paths: /etc/systemd/system
-        patterns: 'restic-*.timer,restic-*.service'
+        patterns: 'kiss-backup*.timer,kiss-backup*.service'
       register: backups_units
 
     - name: Disable + stop restic timers (opt-out)

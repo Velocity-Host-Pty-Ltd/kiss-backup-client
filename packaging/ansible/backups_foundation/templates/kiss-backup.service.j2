@@ -9,7 +9,7 @@
 # "discard". The weekly prune (separate unit) reclaims disk. Caps (GOMAXPROCS/nice/
 # ionice) are applied inside the engine from {{ backups_env_path }}.
 [Unit]
-Description=vps-baseline restic file backup
+Description=KISS Backup file backup
 After=network-online.target
 Wants=network-online.target
 {% if backups_alert_on_check_failure | bool %}

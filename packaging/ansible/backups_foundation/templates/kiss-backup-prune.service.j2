@@ -3,7 +3,7 @@
 # retention (metadata only); prune is the disk-reclaim step and LOCKS the repo, so
 # it runs weekly, not per-backup (handover §13 / prototype runbook).
 [Unit]
-Description=vps-baseline restic retention (forget + prune)
+Description=KISS Backup retention (forget + prune)
 After=network-online.target
 Wants=network-online.target
 {% if backups_alert_on_check_failure | bool %}

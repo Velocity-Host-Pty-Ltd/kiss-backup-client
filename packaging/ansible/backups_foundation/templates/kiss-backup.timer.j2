@@ -2,7 +2,7 @@
 # vps-baseline backups_foundation — hourly file backup schedule. RandomizedDelaySec
 # staggers the fleet within the hour (< the 1h interval, so no tick is skipped).
 [Unit]
-Description=vps-baseline restic file backup (scheduled)
+Description=KISS Backup file backup (scheduled)
 
 [Timer]
 OnCalendar={{ backups_backup_oncalendar }}

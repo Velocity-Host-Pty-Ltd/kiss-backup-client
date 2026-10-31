@@ -3,7 +3,7 @@
 # DETECTION half; handover §13 recovery model). A non-zero exit (damaged repo)
 # triggers OnFailure -> the service_watchdog alert template -> notification framework.
 [Unit]
-Description=vps-baseline restic integrity check
+Description=KISS Backup integrity check
 After=network-online.target
 Wants=network-online.target
 {% if backups_alert_on_check_failure | bool %}

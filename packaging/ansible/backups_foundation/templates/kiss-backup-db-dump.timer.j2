@@ -1,7 +1,7 @@
 # {{ ansible_managed }}
 # vps-baseline backups_foundation — daily per-database logical dump schedule.
 [Unit]
-Description=vps-baseline restic DB logical dump (scheduled)
+Description=KISS Backup DB logical dump (scheduled)
 
 [Timer]
 OnCalendar={{ backups_db_dump_oncalendar }}

@@ -1,8 +1,9 @@
 # {{ ansible_managed }}
-# vps-baseline backups_foundation — nightly mariabackup FULL (new local generation
-# base). Hot/read-only on the live instance; kept LOCAL (not shipped to restic).
+# vps-baseline backups_foundation — hourly mariabackup DIFFERENTIAL (changed pages
+# since the nightly full, NOT since the last diff). Any point restores from full +
+# one diff; falls back to a full if no base exists yet. Kept LOCAL (not in restic).
 [Unit]
-Description=vps-baseline DB physical full backup (local)
+Description=KISS Backup DB physical differential backup (local)
 After=mariadb.service
 {% if backups_alert_on_check_failure | bool %}
 OnFailure=vps-service-alert@%n.service
@@ -10,7 +11,7 @@ OnFailure=vps-service-alert@%n.service
 
 [Service]
 Type=oneshot
-ExecStart={{ backups_engine_path }} db-backup full
+ExecStart={{ backups_engine_path }} db-backup diff
 {% if backups_alert_on_check_failure | bool %}
 # All-clear: a clean start after a prior failure emits the one-shot RECOVERED notice
 # + clears the flag ('-' = never fail the unit on it; silent if it wasn't alerting).

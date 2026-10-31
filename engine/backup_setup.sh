@@ -170,7 +170,7 @@ cmd_status() {
     say "Passphrase:  ${PASSFILE}  (escrow it — break-glass to decrypt the offsite copy)"
     say ""
     say "Schedule (systemd timers):"
-    systemctl list-timers 'restic-*' --all --no-pager 2>/dev/null | sed 's/^/  /' \
+    systemctl list-timers 'kiss-backup*' --all --no-pager 2>/dev/null | sed 's/^/  /' \
         || say "  (timers install on the next converge)"
     say ""
     say "Most recent backups in the repo:"

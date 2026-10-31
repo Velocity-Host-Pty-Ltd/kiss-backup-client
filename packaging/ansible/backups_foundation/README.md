@@ -32,13 +32,13 @@ backups_restic_sha256: "<sha256 of restic_0.19.0_linux_amd64>"   # recommended
 
 | Unit | Schedule (default) | Action |
 |------|--------------------|--------|
-| `restic-backup.timer`  | nightly 02:00 +jitter | `init` (idempotent) then capped file `backup` |
-| `restic-check.timer`   | weekly Sun 03:30      | `check` — **detection**; failure → `OnFailure` alert → notification framework |
-| `restic-prune.timer`   | weekly Sun 04:30      | `forget` (GFS retention) then `prune` (disk reclaim; locks the repo) |
-| `restic-db-full.timer`  | nightly 01:00 +jitter | `db-backup full` — mariabackup full (new generation) — **local** |
-| `restic-db-diff.timer`  | hourly :15 +jitter    | `db-backup diff` — differential (changed pages since the full) — **local** |
-| `restic-db-dump.timer`  | daily 01:40 +jitter   | `db-dump` — per-database `mysqldump` → **restic** (offsite) |
-| `restic-drill.timer`    | weekly Sun 05:30 +jitter | `restore-drill` — prove backups **restore** (file + rotating DB import); **detection**, failure → notifier |
+| `kiss-backup.timer`  | nightly 02:00 +jitter | `init` (idempotent) then capped file `backup` |
+| `kiss-backup-check.timer`   | weekly Sun 03:30      | `check` — **detection**; failure → `OnFailure` alert → notification framework |
+| `kiss-backup-prune.timer`   | weekly Sun 04:30      | `forget` (GFS retention) then `prune` (disk reclaim; locks the repo) |
+| `kiss-backup-db-full.timer`  | nightly 01:00 +jitter | `db-backup full` — mariabackup full (new generation) — **local** |
+| `kiss-backup-db-diff.timer`  | hourly :15 +jitter    | `db-backup diff` — differential (changed pages since the full) — **local** |
+| `kiss-backup-db-dump.timer`  | daily 01:40 +jitter   | `db-dump` — per-database `mysqldump` → **restic** (offsite) |
+| `kiss-backup-drill.timer`    | weekly Sun 05:30 +jitter | `restore-drill` — prove backups **restore** (file + rotating DB import); **detection**, failure → notifier |
 
 The DB timers install only when `backups_db_enabled: true` (a second gate inside
 `backups_enabled`). DB tools auth via `unix_socket` as root. **Two-tier by design:**

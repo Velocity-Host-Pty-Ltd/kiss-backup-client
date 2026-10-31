@@ -83,7 +83,7 @@ gather_status() {
         -e 's/ week\(s\)\?/w/g' -e 's/ day\(s\)\?/d/g' -e 's/ hour\(s\)\?/h/g' -e 's/ minute\(s\)\?/m/g' -e 's/,//g')"
     load="$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)"
     accts="$(find "$TENANT_DIR" -maxdepth 1 -name '*_info.json' 2>/dev/null | wc -l)"
-    if systemctl is-active --quiet restic-backup.timer 2>/dev/null; then btimer="scheduled"; else btimer="off"; fi
+    if systemctl is-active --quiet kiss-backup.timer 2>/dev/null; then btimer="scheduled"; else btimer="off"; fi
     # Repo dedup/size figures come from the CACHE (instant) — never a live restic scan here.
     # ASCII + compact (arrow -> '->', trim ' stored') keeps the line short and terminal-safe.
     # NB the earlier "newt drops multi-byte lines" theory was DISPROVEN (2026-07-02): the sed
