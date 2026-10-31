@@ -43,6 +43,20 @@ ENGINE="${ENGINE:-/usr/local/bin/vps-tooling/restic_backup_v1.sh}"
 ENGINE_SRC="${ENGINE_SRC:-$BASELINE/vps-tooling/restic_backup_v1.sh}"
 KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 BACKUP_ENV="${BACKUP_ENV:-$KBC_CONFIG_DIR/backup.env}"
+
+# KISS connection defaults — the "smooth default" offsite target. NOT secrets, but
+# Velocity-specific deployment values, so they live in config rather than baked into this
+# script: a public build ships kiss-target.conf.example (placeholders), and the Velocity
+# build / brand overlay drops the real values at $KBC_CONFIG_DIR/kiss-target.conf. The
+# operator is always prompted and can override. Absent config => empty defaults, i.e. a
+# generic "bring your own restic target" path.
+KISS_TARGET_CONF="${KISS_TARGET_CONF:-$KBC_CONFIG_DIR/kiss-target.conf}"
+# shellcheck disable=SC1090
+[ -r "$KISS_TARGET_CONF" ] && . "$KISS_TARGET_CONF"
+KISS_ALIAS="${KISS_ALIAS:-kiss}"
+KISS_HOST="${KISS_HOST:-}"
+KISS_USER="${KISS_USER:-}"
+KISS_PORT="${KISS_PORT:-22}"
 PASSFILE="${PASSFILE:-/etc/restic/backup.pass}"
 RESTIC_BIN="${RESTIC_BIN:-/usr/local/bin/restic}"
 RESTIC_VERSION="${RESTIC_VERSION:-0.19.0}"
@@ -209,7 +223,7 @@ say ""
 
 # Preflight: the per-VPS SFTP key must exist (ssh_access_foundation makes it).
 [ -s "${KEY}.pub" ] || die "no backup key at ${KEY}.pub — converge first (ssh_access_foundation generates it)."
-ALIAS="kiss-headless"
+ALIAS="${KISS_ALIAS}"
 
 # Connection — reuse a working alias if there is one; otherwise set it up. Testing
 # FIRST means a box already wired to KISS (existing alias + known_hosts) just works,
@@ -225,9 +239,9 @@ else
     fi
     say "Authorize this box's backup PUBLIC key on the KISS backup account:"
     say ""; cat "${KEY}.pub"; say ""
-    KHOST="$(ask 'KISS hostname or IP' 'kiss.example.net')"
-    KUSER="$(ask 'KISS backup account (username)' 'headless')"
-    KPORT="$(ask 'KISS SSH port' '22')"
+    KHOST="$(ask 'KISS hostname or IP' "$KISS_HOST")"
+    KUSER="$(ask 'KISS backup account (username)' "$KISS_USER")"
+    KPORT="$(ask 'KISS SSH port' "$KISS_PORT")"
     install -d -m 0700 "$(dirname "$SSH_CONFIG")"
     touch "$SSH_CONFIG"; chmod 600 "$SSH_CONFIG"
     # Managed alias block — REPLACED every run, so a changed host/IP/port actually

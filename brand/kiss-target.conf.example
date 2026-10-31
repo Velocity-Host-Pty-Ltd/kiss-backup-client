@@ -1,0 +1,19 @@
+# kiss-target.conf — KISS "smooth default" offsite target (EXAMPLE / template)
+#
+# Copy to  $KBC_CONFIG_DIR/kiss-target.conf  (default /etc/kiss-backup/kiss-target.conf)
+# and fill in your KISS endpoint. backup_setup.sh sources this (if present) to PRE-FILL the
+# connection prompts; the operator can still override every value at the prompt. If this file
+# is absent, the wizard defaults are empty (a generic "bring your own restic target" path).
+#
+# These are deployment values, NOT secrets, and are deliberately kept OUT of the tracked /
+# public source. The Velocity build (or a private brand overlay) supplies the real values;
+# the public repo ships only this placeholder. The client's private SSH key is separate and
+# never lives here (see BACKUP_SSH_KEY, default /etc/restic/kiss_id_rsa).
+
+# SSH alias written to ~/.ssh/config for the KISS host.
+KISS_ALIAS="kiss"
+
+# KISS SFTP endpoint.
+KISS_HOST="sftp.kiss.example"      # your KISS hostname or IP
+KISS_USER="your-kiss-account"      # the KISS backup account username
+KISS_PORT="22"                     # KISS SSH/SFTP port

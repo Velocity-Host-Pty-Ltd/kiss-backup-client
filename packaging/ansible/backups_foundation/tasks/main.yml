@@ -39,7 +39,7 @@
           # Must carry a path, not just a backend/host (e.g. reject "sftp:host:" with
           # no path — that lands restic at the chroot root and fails on permissions).
           - backups_repo is search(':/')
-        fail_msg: "backups_repo is missing or has no path (got '{{ backups_repo }}') — set a full target like sftp:kiss-headless:/data/restic-repo in host.yml"
+        fail_msg: "backups_repo is missing or has no path (got '{{ backups_repo }}') — set a full target like sftp:kiss:/data/restic-repo in host.yml"
         quiet: true
 
     - name: Ensure the vps-tooling bin dir exists

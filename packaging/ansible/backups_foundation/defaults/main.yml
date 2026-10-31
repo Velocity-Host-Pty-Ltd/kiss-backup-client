@@ -36,7 +36,7 @@ backups_restic_version: "0.19.0"
 backups_restic_sha256: ""
 
 # --- repo + sources ---
-# REQUIRED when enabled, e.g. "sftp:kiss-headless:/data/restic-repo".
+# REQUIRED when enabled, e.g. "sftp:kiss:/data/restic-repo".
 backups_repo: ""
 backups_passfile: /etc/restic/backup.pass    # generated on first run if absent (handover §9)
 # Covers data (/home) + configs (/etc) + the bits that live nowhere else: crontabs
