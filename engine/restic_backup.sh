@@ -287,8 +287,18 @@ cmd_validate_excludes() {
     [ "$bad" -eq 0 ]
 }
 
+# Official SHA256s of the pinned restic release assets, copied from the release's
+# SHA256SUMS (github.com/restic/restic/releases/download/v<ver>/SHA256SUMS). Bump
+# these together with RESTIC_VERSION. RESTIC_SHA256 in backup.env overrides them.
+restic_pinned_sha256() {
+    case "$1" in
+        0.19.0_amd64) echo 13176fe6d89d4357947a2cd107218ab2873a5f9d8e1ac2d4cd1c8e07e6839c21 ;;
+        0.19.0_arm64) echo e522ce6bf748d753fee8093e8ec59359972cf5b6bc65fc7c7cf38ae952351d91 ;;
+    esac
+}
+
 cmd_install() {
-    local want="${RESTIC_VERSION:-}" sha="${RESTIC_SHA256:-}"
+    local want="${RESTIC_VERSION:-}" sha="${RESTIC_SHA256:-}" arch
     [ -n "$want" ] || die "RESTIC_VERSION unset — refusing to install an unpinned restic"
     if [ -x "$RESTIC_BIN" ] && "$RESTIC_BIN" version 2>/dev/null | grep -q "restic ${want}\b"; then
         log "restic ${want} already installed at $RESTIC_BIN"
@@ -298,7 +308,17 @@ cmd_install() {
     tmp="$(mktemp -d)" || die "mktemp failed"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
-    bz="restic_${want}_linux_amd64.bz2"
+    case "$(uname -m)" in
+        x86_64)        arch=amd64 ;;
+        aarch64|arm64) arch=arm64 ;;
+        *) die "unsupported CPU architecture: $(uname -m)" ;;
+    esac
+    [ -n "$sha" ] || sha="$(restic_pinned_sha256 "${want}_${arch}")"
+    # A root-run binary that reads the whole box must be verified. Opt out only
+    # deliberately (e.g. testing an unreleased version).
+    [ -n "$sha" ] || [ "${RESTIC_ALLOW_UNVERIFIED:-0}" = 1 ] \
+        || die "no SHA256 known for restic ${want} (${arch}) — set RESTIC_SHA256 in backup.env"
+    bz="restic_${want}_linux_${arch}.bz2"
     url="https://github.com/restic/restic/releases/download/v${want}/${bz}"
     log "downloading restic ${want}"
     curl -fsSL -o "$tmp/$bz" "$url" || die "download failed: $url"
@@ -307,10 +327,10 @@ cmd_install() {
             || die "SHA256 mismatch for $bz — refusing to install"
         log "SHA256 verified"
     else
-        log "WARNING: RESTIC_SHA256 unset — installing without checksum verification"
+        log "WARNING: RESTIC_ALLOW_UNVERIFIED=1 — installing without checksum verification"
     fi
     bunzip2 -f "$tmp/$bz" || die "bunzip2 failed"
-    install -m 0755 "$tmp/restic_${want}_linux_amd64" "$RESTIC_BIN" || die "install failed"
+    install -m 0755 "$tmp/restic_${want}_linux_${arch}" "$RESTIC_BIN" || die "install failed"
     log "installed restic ${want} -> $RESTIC_BIN"
 }
 

@@ -45,6 +45,7 @@ ENGINE="${ENGINE:-/usr/local/lib/kiss-backup/restic_backup.sh}"
 UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 BACKUP_ENV="${BACKUP_ENV:-$KBC_CONFIG_DIR/backup.env}"
+MAIL_ENV="${MAIL_ENV:-$KBC_CONFIG_DIR/mail.env}"
 
 # KISS connection defaults — the "smooth default" offsite target. NOT secrets, but
 # Velocity-specific deployment values, so they live in config rather than baked into this
@@ -312,6 +313,38 @@ if ! yes "Enable offsite backups on this box?" "y/N"; then
 fi
 DB="false"; if yes "Also enable database backups (mariabackup + per-DB dumps)?" "Y/n"; then DB="true"; fi
 
+# DirectAdmin keeps its accounts, domains and packages under /usr/local/directadmin —
+# without them a rebuilt box gets its files back but not its DA accounts. Interim until
+# the DA adapter owns per-panel paths (docs/architecture.md). /etc/virtual is under /etc.
+if [ -z "${BACKUP_PATHS:-}" ] && [ -d /usr/local/directadmin/data ]; then
+    PATHS="$PATHS /usr/local/directadmin/data /usr/local/directadmin/conf"
+    PATHS="$PATHS /usr/local/directadmin/custombuild/options.conf /usr/local/directadmin/custombuild/custom"
+    say "DirectAdmin detected — also backing up its account data + config."
+fi
+
+# Notification email — where the confirmation and backup alerts go (notify.sh reads
+# NOTIFY_OPS_EMAIL from mail.env). Blank = none: events are still logged to journald.
+cur_email="$(grep -m1 '^NOTIFY_OPS_EMAIL=' "$MAIL_ENV" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+while :; do
+    NOTIFY_EMAIL="$(ask "Email for backup reports + alerts ('none' for no email)" "$cur_email")"
+    case "$NOTIFY_EMAIL" in
+        none) NOTIFY_EMAIL=""; break ;;
+        '') break ;;
+        *[!A-Za-z0-9._%+@-]*|*@*@*|@*|*@|*@*..*) ;;
+        *@*.*) break ;;
+    esac
+    say "  That doesn't look like an email address — try again (or 'none')."
+done
+install -d -m 0755 "$(dirname "$MAIL_ENV")"
+tmp="$(mktemp)"
+if [ -s "$MAIL_ENV" ]; then
+    grep -v '^NOTIFY_OPS_EMAIL=' "$MAIL_ENV" > "$tmp"
+else
+    printf '# notify.sh mail settings (sourced as shell). NOTIFY_OPS_EMAIL is set by backup_setup.sh.\n' > "$tmp"
+fi
+[ -n "$NOTIFY_EMAIL" ] && printf 'NOTIFY_OPS_EMAIL="%s"\n' "$NOTIFY_EMAIL" >> "$tmp"
+install -m 0640 "$tmp" "$MAIL_ENV"; rm -f "$tmp"
+
 # Write the backup config — also the persisted opt-in (BACKUP_ENABLED/BACKUP_DB_ENABLED),
 # which `status` reads. The engine sources this file; it ignores the two flags.
 install -d -m 0755 "$(dirname "$BACKUP_ENV")"
@@ -415,9 +448,10 @@ say ""; hr
 say "WHAT HAPPENS NEXT"
 hr
 say "A full backup runs automatically every HOUR — restic only ships what changed,"
-say "so after the first (full) run each one is tiny. Backups begin within ~15 min of"
-say "setup. The most recent 24 are kept hour-by-hour (rolling 24h), then thinned to"
-say "daily/weekly/monthly. The file backup covers:"
+say "so after the first (full) run each one is tiny. The first scheduled run starts"
+say "at the top of the next hour (plus up to 30 min of jitter). The most recent 24 are"
+say "kept hour-by-hour (rolling 24h), then thinned to daily/weekly/monthly. The file"
+say "backup covers:"
 say "    ${PATHS}"
 say "  (site data, system + web-server configs, crontabs, certificates; the engine"
 say "   skips any path not present on this box)."
@@ -428,10 +462,10 @@ else
 fi
 say "The live database files (/var/lib/mysql) are handled by the DB backup, not here."
 say ""
-say "The FIRST full backup can be large (a big /home takes a while) and holds this"
-say "terminal until it finishes. You can let tonight's schedule do it, or run it now."
+say "The FIRST full backup can be large (a big /home takes a while). If you run it now"
+say "it goes in the background — your terminal stays free — or let the next hourly run do it."
 hr
-FULL_NOW="left to the nightly schedule"
+FULL_NOW="left to the next hourly run"
 if yes "Run the first FULL backup now (otherwise the schedule handles it)?" "y/N"; then
     # Run DETACHED so it doesn't hold the terminal and survives a disconnect — a
     # transient systemd unit (journald-logged), not a foreground/child process.
@@ -485,7 +519,12 @@ if [ -x "$NOTIFY_ENGINE" ]; then
     if notify_err="$("$NOTIFY_ENGINE" --event backup-configured \
             --subject "Backups configured + verified on ${host}" \
             --body-file "$cbody" 2>&1)"; then
-        say ""; say "A confirmation email has been sent to ops (audited to journald)."
+        # notify.sh exits 0 for "nothing to send" too — report what it actually did.
+        case "$notify_err" in
+            *"sent event="*) say ""; say "A confirmation email has been sent to ${NOTIFY_EMAIL}." ;;
+            *) say ""; say "(No confirmation email sent — $(printf '%s\n' "$notify_err" | tail -n1 | sed 's/^\[[^]]*\] //'))"
+               [ -n "$NOTIFY_EMAIL" ] || say "(Re-run this wizard and enter an email to get reports + alerts.)" ;;
+        esac
     else
         # Surface the REAL reason (the old vague 'mail not ready' hid a stale-notifier
         # 'unknown event' once). Show vps_notify's own message; setup is unaffected.

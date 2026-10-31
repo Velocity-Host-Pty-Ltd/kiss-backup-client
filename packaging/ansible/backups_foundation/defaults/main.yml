@@ -31,8 +31,9 @@ backups_env_path: /etc/kiss-backup/backup.env
 # --- restic binary (pinned + SHA-verified; handover re-validation = >=0.19) ---
 backups_restic_bin: /usr/local/bin/restic
 backups_restic_version: "0.19.0"
-# sha256 of restic_<ver>_linux_amd64 (post-bunzip2). Empty = install warns + skips
-# checksum verification; set this in host.yml/group_vars for a real fleet.
+# sha256 of the release asset restic_<ver>_linux_<arch>.bz2 (as listed in the release's
+# SHA256SUMS). Empty = use the engine's built-in pin for that version/arch; the engine
+# refuses to install a version it has no pin for.
 backups_restic_sha256: ""
 
 # --- repo + sources ---
