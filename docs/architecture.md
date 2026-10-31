@@ -212,6 +212,21 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
    right ownership (`owner-for-unit` if provided) and importing DB dumps.
 4. Whole-box / bare restore remains available as an engine-level path independent of any adapter.
 
+### 2.3 Feature toggles — not every target has databases
+
+The whole-box engine inherited a MariaDB/MySQL assumption, but some targets have **no databases at
+all** (e.g. a SmarterMail mail server), while others (DirectAdmin, cPanel) usually do. So the backup
+function groups are **individually switchable**, not all-or-nothing:
+
+- Engine config carries per-function toggles, e.g. `BACKUP_DBS=yes|no` (with room for more as app
+  adapters land).
+- An adapter's `info` (§1.4) may declare a `has_databases: true|false` hint so the **setup wizard**
+  can pick a sensible default per target: SmarterMail → DB snapshots off; DirectAdmin / cPanel →
+  prompt "enable DB snapshots?" defaulting on.
+- The **setup wizard** surfaces these as explicit opt-in/opt-out prompts and the operator can always
+  override the adapter's default. (Wizard UI is a later build step — captured here so the engine and
+  the `info` schema leave room for it now.)
+
 ---
 
 ## 3. Layer model (recap, see HANDOVER §3)
