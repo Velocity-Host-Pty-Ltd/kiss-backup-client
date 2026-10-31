@@ -22,8 +22,46 @@ set -u
 ENGINE="${ENGINE:-/usr/local/lib/kiss-backup/restic_backup.sh}"
 TITLE="Restore an account"
 
+# Same palette as console.sh, but only if unset — inherits the launcher's when run from
+# kiss-console, and is self-sufficient standalone (newt's default theme makes the
+# focused button hard to tell apart).
+: "${NEWT_COLORS:=
+root=,black
+border=brown,black
+window=white,black
+title=brightyellow,black
+button=white,black
+actbutton=black,yellow
+listbox=white,black
+actlistbox=white,black
+sellistbox=white,black
+actsellistbox=black,yellow
+entry=white,black
+label=white,black
+checkbox=white,black
+actcheckbox=black,yellow
+roottext=brown,black
+textbox=white,black
+acttextbox=black,yellow
+helpline=brightyellow,black
+}"
+export NEWT_COLORS
+
 ui() { whiptail --title "$TITLE" "$@" 3>&1 1>&2 2>&3; }
 msg() { whiptail --title "$TITLE" --msgbox "$1" "${2:-12}" 72; }
+# Yes/No as a VERTICAL two-row menu that starts on "No" — never whiptail --yesno. Over
+# SSH the horizontal <Yes>/<No> toggle can show the highlight on the opposite button
+# (an "OK" that cancels, a "No" that proceeds); vertical menus render correctly. Enter
+# alone, a stray key or any desync can only cancel. (Same fix as headless'
+# account_console confirm(), vps-baseline be6939e.)
+confirm() {
+    local choice
+    choice="$(whiptail --title "$TITLE" --notags --default-item no \
+        --menu "$1" "${3:-16}" 72 2 \
+        no  "No — cancel, change nothing" \
+        yes "${2:-Yes — proceed}" 3>&1 1>&2 2>&3)" || return 1
+    [ "$choice" = yes ]
+}
 # Show a file in a scrollable box (sized to the terminal).
 show() {
     local rows cols; rows="$(tput lines 2>/dev/null || echo 24)"; cols="$(tput cols 2>/dev/null || echo 80)"
@@ -80,7 +118,8 @@ case "$what" in
 esac
 
 # 4. Merge or mirror.
-if ui --defaultno --yesno "Make it EXACTLY as it was?\n\nYes = mirror: files and tables created since that backup are DELETED.\nNo  = merge (recommended): restored items are put back, newer extras are kept." 13 72; then
+if confirm "Make it EXACTLY as it was?\n\nNo (recommended) = merge: restored items are put back, newer extras are kept.\nYes = mirror: files and tables created since that backup are DELETED." \
+        "Yes — mirror (delete newer extras)" 15; then
     args+=(--mirror)
 fi
 
@@ -91,7 +130,8 @@ show "preview (nothing changed yet)" "$out"
 [ "$rc" -eq 0 ] || { msg "The preview failed — nothing was changed.\nThe output above shows why." 9; exit 1; }
 
 # 6. Confirm + restore.
-ui --defaultno --yesno "Restore $unit now, as previewed?\n\nA safety copy of the account's current state is taken first, so this can be undone (pick that safety copy as the backup to restore)." 12 72 || exit 0
+confirm "Restore $unit now, as previewed?\n\nA safety copy of the account's current state is taken first, so this can be undone (pick that safety copy as the backup to restore)." \
+    "Yes — restore $unit now" 15 || exit 0
 "$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1
 rc=$?
 show "result" "$out"
