@@ -1,0 +1,139 @@
+#!/bin/bash
+#
+# Velocity adapter (Layer 2) — vps-baseline / headless tenant ledger
+# Version: 1.0.0
+# Script Name: adapters/velocity/adapter
+# Project: KISS-Backup-Client
+# Summary: Answers the adapter contract (docs/architecture.md §1) for a Velocity
+#   vps-baseline box, from its tenant ledger — so vps-baseline can adopt this product
+#   and keep its per-account restore.
+#
+# Purpose:
+#   This is where the tenant-ledger coupling inherited from vps-baseline now lives
+#   (EXTRACTION item 1), behind the contract. A unit = one tenant record
+#   /var/log/tenant-management/<account>_info.json, written by provision_site. Scope
+#   matches vps-baseline's own backup_ondemand: the record's DOCROOT (default
+#   /home/<account>/public_html) and the <db_prefix>_* databases (db_prefix ==
+#   account by design). The record is a cache: the docroot is verified on disk.
+#
+#   Default restore mode is MIRROR, matching headless (exact match: a file injected
+#   since the snapshot does not survive). The engine's --merge overrides it.
+#
+# Usage:  adapter <verb> [args…]   — verbs per docs/architecture.md §1.3:
+#   info | detect | preflight | list-units | paths-for-unit <u> | dbs-for-unit <u>
+#   owner-for-unit <u> | restore-unit <u> <workdir>
+#
+# Exit: 0 ok · 1 usage / bad unit · 2 not ready · 3 restore step failed · 10 detect: no ledger.
+
+set -u
+set -o pipefail
+
+TENANT_DIR="${TENANT_DIR:-/var/log/tenant-management}"
+MYSQL_BIN="${MYSQL_BIN:-mysql}"
+
+err() { printf 'velocity: %s\n' "$*" >&2; }
+die() { err "$2"; exit "$1"; }
+# shellcheck source=../lib/restore_common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/restore_common.sh" || die 2 "adapters/lib/restore_common.sh missing"
+
+# Account name shape is the platform contract (vps-baseline handover §8).
+valid_name() { [[ "$1" =~ ^[a-z][a-z0-9]{0,15}$ ]]; }
+
+# One string field from a tenant record (machine-written `"key": "value",` lines) —
+# the same reader vps-baseline's backup_ondemand uses, so no jq/python dependency.
+record_field() {
+    grep -m1 "\"$1\"[[:space:]]*:" "$2" 2>/dev/null \
+        | sed -E 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/'
+}
+
+record_of() { printf '%s/%s_info.json\n' "$TENANT_DIR" "$1"; }
+
+valid_unit() {
+    valid_name "$1" || die 1 "invalid unit-id '$1'"
+    [ -r "$(record_of "$1")" ] || die 1 "no tenant record for '$1' in $TENANT_DIR"
+}
+
+# Resolve docroot + DB prefix from the record (fallbacks only for a missing field).
+docroot_of() { local d; d="$(record_field docroot "$(record_of "$1")")"; printf '%s\n' "${d:-/home/$1/public_html}"; }
+prefix_of()  { local p; p="$(record_field db_prefix "$(record_of "$1")")"; printf '%s\n' "${p:-$1}"; }
+
+v_info() {
+    printf '{"adapter":"velocity","version":"1","contract":"1","capabilities":["preflight","owner-for-unit"],"unit_noun":"account","has_databases":true,"default_restore_mode":"mirror"}\n'
+}
+
+v_detect() {
+    compgen -G "$TENANT_DIR/*_info.json" >/dev/null && exit 0
+    exit 10
+}
+
+v_preflight() {
+    local t bad=0
+    [ -d "$TENANT_DIR" ] || { err "no tenant ledger at $TENANT_DIR"; bad=1; }
+    for t in rsync "$MYSQL_BIN"; do
+        command -v "$t" >/dev/null 2>&1 || { err "missing tool: $t"; bad=1; }
+    done
+    "$MYSQL_BIN" -N -B -e 'SELECT 1' >/dev/null 2>&1 || { err "cannot reach MariaDB/MySQL as root"; bad=1; }
+    [ "$bad" -eq 0 ] || exit 2
+}
+
+v_list_units() {
+    local f u dom pkg
+    for f in "$TENANT_DIR"/*_info.json; do
+        [ -e "$f" ] || continue
+        u="$(basename "$f" _info.json)"
+        valid_name "$u" || continue
+        dom="$(record_field domain "$f")"; pkg="$(record_field package "$f")"
+        printf '%s\t%s\t%s\n' "$u" "$u${dom:+ ($dom)}" "${pkg:-account}"
+    done
+}
+
+v_paths_for_unit() {
+    local d
+    valid_unit "$1"
+    d="$(docroot_of "$1")"
+    # The record is a cache — only report a docroot that really exists.
+    [ -d "$d" ] && printf '%s\n' "$d"
+    return 0
+}
+
+v_dbs_for_unit() {
+    local p
+    valid_unit "$1"
+    p="$(prefix_of "$1")"
+    [[ "$p" =~ ^[A-Za-z0-9]+$ ]] || die 1 "unsafe db_prefix '$p' in $1's record"
+    "$MYSQL_BIN" -N -B -e "SHOW DATABASES LIKE '${p}\\_%'" 2>/dev/null \
+        | grep -Ev '^(information_schema|performance_schema|mysql|sys)$' \
+        | while IFS= read -r db; do printf 'mysql\t%s\t%s\n' "$db" "$1"; done
+}
+
+v_owner_for_unit() {
+    valid_unit "$1"
+    printf '%s:%s\n' "$(id -u "$1")" "$(id -g "$1")"
+}
+
+# The only area a tenant restores into: its docroot (vps-baseline's on-demand scope).
+allowed_roots() { docroot_of "$1"; }
+
+v_restore_unit() {
+    local u="$1" wd="$2" mode dry md p
+    valid_unit "$u"
+    md="$(rc_mode "$wd")" || exit $?          # a die in rc_mode must stop the restore
+    read -r mode dry <<< "$md"
+    p="$(prefix_of "$u")"
+    [[ "$p" =~ ^[A-Za-z0-9]+$ ]] || die 1 "unsafe db_prefix '$p' in $u's record"
+    rc_restore_files "$u" "$wd" "$mode" "$dry"
+    rc_restore_dbs "$p" "$wd" "$mode" "$dry"
+}
+
+verb="${1:-}"; shift || true
+case "$verb" in
+    info)                          v_info ;;
+    detect)                        v_detect ;;
+    preflight)                     v_preflight ;;
+    list-units|list_units)         v_list_units ;;
+    paths-for-unit|paths_for_unit) [ $# -eq 1 ] || die 1 "usage: paths-for-unit <unit>"; v_paths_for_unit "$1" ;;
+    dbs-for-unit|dbs_for_unit)     [ $# -eq 1 ] || die 1 "usage: dbs-for-unit <unit>"; v_dbs_for_unit "$1" ;;
+    owner-for-unit)                [ $# -eq 1 ] || die 1 "usage: owner-for-unit <unit>"; v_owner_for_unit "$1" ;;
+    restore-unit|restore_unit)     [ $# -eq 2 ] || die 1 "usage: restore-unit <unit> <workdir>"; v_restore_unit "$1" "$2" ;;
+    *) die 1 "usage: adapter info|detect|preflight|list-units|paths-for-unit|dbs-for-unit|owner-for-unit|restore-unit" ;;
+esac

@@ -34,8 +34,10 @@
 #   restic_backup_v1.sh restore-drill           # verify backups RESTORE (file + rotating DB import); non-destructive
 #   restic_backup_v1.sh validate-excludes       # screen the operator exclude file for dangerous (root-nuking) patterns
 #   restic_backup_v1.sh list-units              # the adapter's restorable units (e.g. DA accounts)
+#   restic_backup_v1.sh adapter-info            # the active adapter's info JSON (console uses it)
 #   restic_backup_v1.sh restore-unit <unit> [--snapshot ID] [--db-snapshot ID] [--only PATH]
-#         [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]
+#         [--files-only|--dbs-only] [--merge|--mirror] [--dry-run] [--yes]
+#                                               # mode default = the adapter's (DA merge, velocity mirror)
 #                                               # restore ONE unit from the whole-box snapshots via
 #                                               # the adapter; without --yes it only prints the plan
 # Examples (real on-box path; /usr/local/bin is not on root's login PATH):
@@ -601,6 +603,7 @@ adapter_bin() {
 }
 
 cmd_list_units() { "$(adapter_bin)" list-units; }
+cmd_adapter_info() { "$(adapter_bin)" info; }
 
 # The BACKUP_PATHS root that covers <path> (file snapshots are found by it), or nothing.
 root_for_path() {
@@ -620,7 +623,7 @@ snap_row() {
 }
 
 cmd_restore_unit() {
-    local unit="" fsnap="" dsnap="" only="" do_files=1 do_dbs=1 mode=merge dry=0 yes=0
+    local unit="" fsnap="" dsnap="" only="" do_files=1 do_dbs=1 mode="" dry=0 yes=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --snapshot)    fsnap="${2:?--snapshot needs an id}"; shift 2 ;;
@@ -629,6 +632,7 @@ cmd_restore_unit() {
             --files-only)  do_dbs=0; shift ;;
             --dbs-only)    do_files=0; shift ;;
             --mirror)      mode=mirror; shift ;;
+            --merge)       mode=merge; shift ;;
             --dry-run)     dry=1; shift ;;
             --yes)         yes=1; shift ;;
             -*)            die "restore-unit: unknown option $1" ;;
@@ -638,6 +642,10 @@ cmd_restore_unit() {
     [ -n "$unit" ] || die "usage: restore-unit <unit> [--snapshot ID] [--only PATH] [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]"
     local ad; ad="$(adapter_bin)"
     if "$ad" info | grep -q '"preflight"'; then "$ad" preflight || die "adapter preflight failed"; fi
+    # No --merge/--mirror: the adapter's default (velocity = mirror, headless' exact match).
+    if [ -z "$mode" ]; then
+        if "$ad" info | grep -q '"default_restore_mode":"mirror"'; then mode=mirror; else mode=merge; fi
+    fi
     "$ad" list-units | cut -f1 | grep -qxF -- "$unit" || die "no unit '$unit' — see: list-units"
 
     # What belongs to the unit (adapter), narrowed by --only to one sub-path.
@@ -672,7 +680,10 @@ cmd_restore_unit() {
     # and the newest db-dump at or before it (or --db-snapshot).
     local frow="" drow="" ftime=""
     if [ "$do_files" -eq 1 ] || [ -z "$dsnap" ]; then
-        if [ -n "$fsnap" ]; then frow="$(snap_row "$fsnap")"; else frow="$(snap_row --path "${root:-/home}")"; fi
+        # The unit's root picks the file snapshots; with --dbs-only there's none, so use
+        # the first BACKUP_PATHS root (every whole-box file snapshot holds all of them).
+        [ -n "$root" ] || root="${BACKUP_PATHS%% *}"
+        if [ -n "$fsnap" ]; then frow="$(snap_row "$fsnap")"; else frow="$(snap_row --path "$root")"; fi
         [ -n "$frow" ] || die "no file snapshot found${fsnap:+ with id $fsnap}"
         fsnap="${frow%%$'\t'*}"; ftime="${frow#*$'\t'}"
     fi
@@ -787,6 +798,7 @@ main() {
         db-dump)   cmd_db_dump "$@" ;;
         restore-drill) cmd_restore_drill "$@" ;;
         list-units)    cmd_list_units "$@" ;;
+        adapter-info)  cmd_adapter_info "$@" ;;
         restore-unit)  cmd_restore_unit "$@" ;;
         validate-excludes) cmd_validate_excludes "$@" ;;
         ""|-h|--help|help) usage 0 ;;

@@ -126,13 +126,17 @@ upgrade_restic() {
     fi
     # Per-account restore needs ADAPTER (and, on DA, the DNS zones in the backup).
     # Add them to a WIZARD-written config on a box the adapter recognises.
-    if head -1 "$env" | grep -q '^# backup-setup ' && ! grep -q '^ADAPTER=' "$env" \
-            && "$LIB/adapters/directadmin/adapter" detect >/dev/null 2>&1; then
-        printf 'ADAPTER="directadmin"\n' >> "$env"
-        say "Added ADAPTER=directadmin to $env (per-account restore)."
-        if ! grep -q '^BACKUP_PATHS=.*/var/named' "$env"; then
-            sed -i 's|^\(BACKUP_PATHS="[^"]*\)"|\1 /var/named"|' "$env"
-            say "Added /var/named (DNS zones) to BACKUP_PATHS in $env."
+    if head -1 "$env" | grep -q '^# backup-setup ' && ! grep -q '^ADAPTER=' "$env"; then
+        if "$LIB/adapters/directadmin/adapter" detect >/dev/null 2>&1; then
+            printf 'ADAPTER="directadmin"\n' >> "$env"
+            say "Added ADAPTER=directadmin to $env (per-account restore)."
+            if ! grep -q '^BACKUP_PATHS=.*/var/named' "$env"; then
+                sed -i 's|^\(BACKUP_PATHS="[^"]*\)"|\1 /var/named"|' "$env"
+                say "Added /var/named (DNS zones) to BACKUP_PATHS in $env."
+            fi
+        elif "$LIB/adapters/velocity/adapter" detect >/dev/null 2>&1; then
+            printf 'ADAPTER="velocity"\n' >> "$env"
+            say "Added ADAPTER=velocity to $env (per-account restore from the tenant ledger)."
         fi
     fi
     say "Checking restic against the pinned version ..."
@@ -153,6 +157,9 @@ do_install() {
     install -m 0750 "$SRC/console/restore_account.sh" "$LIB/restore_account.sh"
     # Layer-2/3 adapters (docs/architecture.md §1.6): adapters/<name>/adapter.
     local a
+    # Shared adapter helpers (restore_common.sh) — sourced by every adapter.
+    install -d -m 0755 "$LIB/adapters/lib"
+    for a in "$SRC"/adapters/lib/*.sh; do [ -f "$a" ] && install -m 0640 "$a" "$LIB/adapters/lib/"; done
     for a in "$SRC"/adapters/*/adapter; do
         [ -f "$a" ] || continue
         install -d -m 0755 "$LIB/adapters/$(basename "$(dirname "$a")")"

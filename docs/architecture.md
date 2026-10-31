@@ -128,7 +128,10 @@ Fields never contain a literal tab or newline. Paths that might (exotic filename
 ```
 
 `contract` is the contract-version this adapter speaks (this document is contract `1`). The engine
-refuses an adapter whose `contract` major it does not implement.
+refuses an adapter whose `contract` major it does not implement. Optional keys: `has_databases`
+(wizard hint, §2.3) and **`default_restore_mode`** (`merge` | `mirror`) — the mode the engine and
+console use when the operator doesn't choose (DirectAdmin `merge`; velocity `mirror`, headless'
+exact-match restore).
 
 ### 1.5 Environment passed to an adapter
 
@@ -307,7 +310,8 @@ docs/                # HANDOVER.md, architecture.md (this file), EXTRACTION.md (
 ### 4.3 Module = subfolder (decided)
 
 Every Layer-2/3 module lives in its **own subfolder** under `adapters/`, never as a single loose
-file. A folder gives each module room for helper libs, its own tests, and a config template without
+file. Code shared between adapters lives in `adapters/lib/` (e.g. `restore_common.sh`), sourced by
+the adapters — never by Layer 1. A folder gives each module room for helper libs, its own tests, and a config template without
 cluttering the parent tree, and it matches the discovery rule in §1.6 (`adapters/<name>/adapter`).
 
 ---

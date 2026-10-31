@@ -48,6 +48,9 @@ MYSQL_BIN="${MYSQL_BIN:-mysql}"
 
 err() { printf 'directadmin: %s\n' "$*" >&2; }
 die() { err "$2"; exit "$1"; }
+# Shared restore helpers (file sync + DB import) — adapters/lib, installed alongside.
+# shellcheck source=../lib/restore_common.sh
+. "$(dirname "$(readlink -f "$0")")/../lib/restore_common.sh" || die 2 "adapters/lib/restore_common.sh missing"
 
 # DA usernames are lowercase letters/digits (DA's own rule); anything else is not ours
 # and must never reach a path or SQL string.
@@ -64,7 +67,7 @@ domains_of() {
 }
 
 v_info() {
-    printf '{"adapter":"directadmin","version":"1","contract":"1","capabilities":["preflight","owner-for-unit"],"unit_noun":"account","has_databases":true}\n'
+    printf '{"adapter":"directadmin","version":"1","contract":"1","capabilities":["preflight","owner-for-unit"],"unit_noun":"account","has_databases":true,"default_restore_mode":"merge"}\n'
 }
 
 v_detect() {
@@ -117,50 +120,12 @@ v_owner_for_unit() {
 }
 
 v_restore_unit() {
-    local u="$1" wd="$2" mode="${KBC_RESTORE_MODE:-merge}" dry="${KBC_DRY_RUN:-0}" p rel f db
-    local -a rs=(-aHAX --numeric-ids)
+    local u="$1" wd="$2" mode dry md
     valid_unit "$u"
-    [ -d "$wd" ] || die 1 "workdir $wd not found"
-    case "$mode" in merge|mirror) ;; *) die 1 "KBC_RESTORE_MODE must be merge or mirror" ;; esac
-    [ "$dry" = 1 ] && rs+=(-n -i)
-    [ "$mode" = mirror ] && rs+=(--delete)
-
-    # Files: only the account's own paths, each synced onto itself — never a blanket
-    # rsync onto /, so a stray staged path can't land outside the account.
-    if [ -d "$wd/files" ]; then
-        while IFS= read -r p; do
-            [ -n "$p" ] || continue
-            rel="$wd/files$p"
-            [ -e "$rel" ] || continue
-            if [ -d "$rel" ]; then
-                mkdir -p "$p" 2>/dev/null || [ "$dry" = 1 ] || die 3 "cannot create $p"
-                rsync "${rs[@]}" "$rel/" "$p/" || die 3 "rsync failed for $p"
-            else
-                rsync "${rs[@]}" "$rel" "$p" || die 3 "rsync failed for $p"
-            fi
-            if [ "$dry" = 1 ]; then err "files: $p would be restored ($mode)"; else err "files: $p restored ($mode)"; fi
-        done < <(staged_paths "$u" "$wd")
-    fi
-
-    # Databases: only <user>_* names (the DA ownership rule), imported into place.
-    if [ -d "$wd/dbs" ]; then
-        for f in "$wd"/dbs/*.sql; do
-            [ -e "$f" ] || continue
-            db="$(basename "$f" .sql)"
-            [[ "$db" == "${u}_"* ]] && [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] \
-                || { err "skipping $db — not owned by $u"; continue; }
-            if [ "$dry" = 1 ]; then
-                err "db: $db would be imported ($mode)"; continue
-            fi
-            if [ "$mode" = mirror ]; then
-                # Dropping a DB keeps its grants (they live in mysql.db by name).
-                "$MYSQL_BIN" -e "DROP DATABASE IF EXISTS \`$db\`" || die 3 "drop $db failed"
-            fi
-            "$MYSQL_BIN" -e "CREATE DATABASE IF NOT EXISTS \`$db\`" || die 3 "create $db failed"
-            "$MYSQL_BIN" "$db" < "$f" || die 3 "import $db failed"
-            err "db: $db imported ($mode)"
-        done
-    fi
+    md="$(rc_mode "$wd")" || exit $?          # a die in rc_mode must stop the restore
+    read -r mode dry <<< "$md"
+    rc_restore_files "$u" "$wd" "$mode" "$dry"
+    rc_restore_dbs "$u" "$wd" "$mode" "$dry"      # DA databases are <user>_*
 
     [ "$dry" = 1 ] && return 0
     # Let DA rebuild what it generates from the account config, and reload DNS if a
@@ -186,25 +151,6 @@ allowed_roots() {
     } | sort -u | while IFS= read -r dom; do
         printf '%s\n' "$VIRTUAL_DIR/$dom" "$NAMED_DIR/$dom.db"
     done
-}
-
-# The paths the engine staged (<workdir>/paths, one per line — whole areas, or a
-# sub-path for a narrowed --only restore), kept only if inside one of the account's
-# areas. A crafted workdir can't widen a restore beyond the account.
-staged_paths() {
-    local u="$1" wd="$2" p a ok roots
-    [ -r "$wd/paths" ] || return 0
-    roots="$(allowed_roots "$u" "$wd")"
-    while IFS= read -r p; do
-        [ -n "$p" ] || continue
-        case "$p" in /*) ;; *) err "skipping non-absolute path $p"; continue ;; esac
-        case "/$p/" in */../*|*/./*) err "skipping unsafe path $p"; continue ;; esac
-        ok=0
-        while IFS= read -r a; do
-            { [ "$p" = "$a" ] || [[ "$p" == "$a"/* ]]; } && { ok=1; break; }
-        done <<< "$roots"
-        if [ "$ok" -eq 1 ]; then printf '%s\n' "$p"; else err "skipping $p — outside $u's areas"; fi
-    done < "$wd/paths"
 }
 
 verb="${1:-}"; shift || true

@@ -118,11 +118,15 @@ case "$what" in
         args+=(--files-only --only "$path") ;;
 esac
 
-# 4. Merge or mirror.
-if confirm "Make it EXACTLY as it was?\n\nNo (recommended) = merge: restored items are put back, newer extras are kept.\nYes = mirror: files and tables created since that backup are DELETED." \
-        "Yes — mirror (delete newer extras)" 15; then
-    args+=(--mirror)
-fi
+# 4. Merge or mirror — starts on the adapter's recommended mode (DirectAdmin: merge;
+#    velocity/headless: mirror, its exact-match restore). Always passed explicitly.
+defmode=merge
+"$ENGINE" adapter-info 2>/dev/null | grep -q '"default_restore_mode":"mirror"' && defmode=mirror
+mode="$(ui --notags --default-item "$defmode" --menu \
+    "How should $unit be put back?$( [ "$defmode" = mirror ] && printf '\n\nRecommended here: EXACTLY as it was (an injected file can'"'"'t survive).')" 14 72 2 \
+    merge  "Merge — restore items, keep anything newer$( [ "$defmode" = merge ] && printf ' (recommended)')" \
+    mirror "Exactly as it was — DELETE files/tables created since$( [ "$defmode" = mirror ] && printf ' (recommended)')")" || exit 0
+args+=("--$mode")
 
 # 5. Preview.
 "$ENGINE" restore-unit "${args[@]}" --dry-run >"$out" 2>&1

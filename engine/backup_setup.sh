@@ -359,7 +359,8 @@ install -d -m 0700 "$(dirname "$PASSFILE")"
     printf 'BACKUP_ENABLED="true"\n'
     printf 'BACKUP_DB_ENABLED="%s"\n' "$DB"
     # Per-account restore (restore-unit) goes through the panel's adapter.
-    [ -d /usr/local/directadmin/data/users ] && printf 'ADAPTER="directadmin"\n'
+    if [ -d /usr/local/directadmin/data/users ]; then printf 'ADAPTER="directadmin"\n'
+    elif compgen -G "${TENANT_DIR:-/var/log/tenant-management}/*_info.json" >/dev/null; then printf 'ADAPTER="velocity"\n'; fi
     printf 'BACKUP_REPO="%s"\n' "$REPO"
     printf 'BACKUP_PASSFILE="%s"\n' "$PASSFILE"
     printf 'BACKUP_PATHS="%s"\n' "$PATHS"
