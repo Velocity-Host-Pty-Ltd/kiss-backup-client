@@ -30,16 +30,19 @@ textbox=white,black
 helpline=brightyellow,black'
 
 results=()
-# try <name> <unfocused fg,bg> <focused fg,bg> <description>
+# try <name> <button> <compactbutton or ""> <description>
+# whiptail's <Ok>/<Cancel> are newt COMPACT buttons: the FOCUSED one is drawn with
+# `button`, the UNFOCUSED ones with `compactbutton` (newt default: black on white).
 try() {
     export NEWT_COLORS="${base}
 actlistbox=white,black
-actsellistbox=${3}
+actsellistbox=black,yellow
 button=${2}
-actbutton=${3}
-checkbox=${2}
-actcheckbox=${3}
-acttextbox=${3}"
+${3:+compactbutton=${3}}
+actbutton=black,yellow
+checkbox=white,black
+actcheckbox=black,yellow
+acttextbox=black,yellow"
     local rc _sel
     # The screen is drawn on stdout and the answer comes back on stderr — capture the
     # answer only (never redirect the drawing away, or the dialog is invisible).
@@ -55,9 +58,8 @@ acttextbox=${3}"
     results+=("Palette ${1} (${4%%.*}): pressed ${pressed}")
 }
 
-try A "white,black" "black,yellow"    "A = CURRENT: focused black on yellow, unfocused white text."
-try B "gray,black"  "black,lightgray" "B = PROPOSED: focused black on light grey, unfocused dim grey text."
-try C "white,black" "white,blue"      "C = ALTERNATIVE: focused white on blue, unfocused white text."
+try A "white,black"  ""            "A = OLD palette (bug): button plain, compactbutton unset -> the button you are NOT on shows a white block."
+try B "black,yellow" "white,black"   "B = FIXED palette (in kiss-console now): focused black on yellow, unfocused plain."
 
 clear
 printf 'Results (compare with what LOOKED highlighted each time):\n'

@@ -31,6 +31,11 @@ BRAND="Velocity Host — Operator Console"
 TENANT_DIR="${TENANT_DIR:-/var/log/tenant-management}"
 STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/kiss-backups/repo-stats}"
 
+# BUTTONS: whiptail draws <Ok>/<Cancel> as newt COMPACT buttons — the FOCUSED one uses
+# `button`, the UNFOCUSED ones use `compactbutton`; `actbutton` is never used. Left unset,
+# compactbutton falls back to newt's default black-on-white block, so the button you are
+# NOT on looks highlighted ("Cancel highlighted, Enter presses Ok"). Measured 2026-10-31
+# (newt 0.52.25, pty probe). Keep button = the highlight, compactbutton = plain.
 # Velocity Host palette for whiptail/newt. newt supports only the 16 NAMED colours (no hex):
 # Palette B (maintainer's pick) — BLACK text on a bright-YELLOW highlight bar (high-contrast),
 # brand-orange-ish 'brown' border + brightyellow title. Exported so any whiptail the console
@@ -41,8 +46,9 @@ root=,black
 border=brown,black
 window=white,black
 title=brightyellow,black
-button=white,black
+button=black,yellow
 actbutton=black,yellow
+compactbutton=white,black
 listbox=white,black
 actlistbox=white,black
 sellistbox=white,black
