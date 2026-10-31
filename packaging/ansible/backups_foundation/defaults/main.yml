@@ -84,8 +84,8 @@ backups_watchdog_helper_path: /usr/local/bin/vps-tooling/service_watchdog_v1.sh
 # unchained fallback + portable single-DB restore). Restore is an operator runbook
 # step (restore-aside), never an engine action.
 backups_db_enabled: false
-backups_db_stage: /var/lib/vps-backups/mariabackup   # physical-chain staging (full + diffs)
-backups_db_dump_dir: /var/lib/vps-backups/dumps      # per-database logical dumps
+backups_db_stage: /var/lib/kiss-backups/mariabackup   # physical-chain staging (full + diffs)
+backups_db_dump_dir: /var/lib/kiss-backups/dumps      # per-database logical dumps
 backups_mariabackup_bin: mariabackup
 backups_db_full_oncalendar: "*-*-* 01:00:00"         # nightly full (new chain base)
 backups_db_diff_oncalendar: "*-*-* *:15:00"          # hourly differential (changed pages since the full)
@@ -100,5 +100,5 @@ backups_drill_enabled: true                          # the whole drill (opt-out)
 backups_drill_db_import: true                        # the heavy DB import-verify (load-sensitive opt-out)
 backups_drill_file: /etc/hostname                    # small sentinel restored end-to-end (must be within backups_paths)
 backups_drill_db_budget_bytes: 1610612736            # ~1.5 GiB restored per run (rotating cursor)
-backups_drill_scratch: /var/lib/vps-backups/drill
+backups_drill_scratch: /var/lib/kiss-backups/drill
 backups_drill_oncalendar: "Sun *-*-* 05:30:00"       # weekly, off-hours, after backup/check/prune

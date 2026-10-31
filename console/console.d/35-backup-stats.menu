@@ -3,6 +3,6 @@
 # the header updates once the scan finishes). Needs root.
 category="Backups"
 title="Refresh repo stats (background — updates the header)"
-command="if systemd-run --collect --unit=vps-repo-stats-refresh /usr/local/bin/vps-tooling/backup_setup_v1.sh refresh-stats --force >/dev/null 2>&1; then echo 'Repo-stats refresh started in the background.'; echo 'Choose Refresh status (or reopen the console) in ~a minute for updated figures.'; else echo 'Could not background it — running now (may take a minute)...'; /usr/local/bin/vps-tooling/backup_setup_v1.sh refresh-stats --force; fi"
+command="if systemd-run --collect --unit=kiss-repo-stats-refresh /usr/local/bin/vps-tooling/backup_setup_v1.sh refresh-stats --force >/dev/null 2>&1; then echo 'Repo-stats refresh started in the background.'; echo 'Choose Refresh status (or reopen the console) in ~a minute for updated figures.'; else echo 'Could not background it — running now (may take a minute)...'; /usr/local/bin/vps-tooling/backup_setup_v1.sh refresh-stats --force; fi"
 needs_root=1
 order=35

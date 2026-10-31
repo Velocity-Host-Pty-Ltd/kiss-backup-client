@@ -59,9 +59,9 @@ PATHS="${BACKUP_PATHS:-/home /etc /root /var/spool/cron /usr/local/lsws/conf}"
 # remote repo), so we DON'T run them interactively. `refresh-stats` writes this cache; `status`
 # and the console header READ it instantly + show "as of <when>"; a stale cache is refreshed
 # in the background on view (throttled + flock-guarded). See docs/operator_console_design.md.
-STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/vps-backups/repo-stats}"
+STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/kiss-backups/repo-stats}"
 STATS_MAX_AGE="${BACKUP_STATS_MAX_AGE:-72000}"        # 20h — refresh roughly once a day
-STATS_LOCK="${BACKUP_STATS_LOCK:-/run/lock/vps-repo-stats.lock}"
+STATS_LOCK="${BACKUP_STATS_LOCK:-/run/lock/kiss-repo-stats.lock}"
 
 say()  { printf '%s\n' "$*"; }
 hr()   { printf -- '--------------------------------------------------------------------------------\n'; }
@@ -362,10 +362,10 @@ hr
 # Verify with a SMALL round-trip (a few KB) — proves the repo accepts a backup and
 # restores it, WITHOUT starting the full dataset backup. Fast, non-blocking.
 say ""; say "Verifying with a small test (writes + restores a few KB — NOT the full backup) ..."
-vd="$(mktemp -d)"; printf 'vps-backup verify\n' > "${vd}/verify.txt"
+vd="$(mktemp -d)"; printf 'kiss-backup verify\n' > "${vd}/verify.txt"
 if "$RESTIC_BIN" -r "$REPO" --password-file "$PASSFILE" backup "${vd}/verify.txt" --tag verify >/dev/null 2>&1 \
    && "$RESTIC_BIN" -r "$REPO" --password-file "$PASSFILE" restore latest --tag verify --target "${vd}/r" >/dev/null 2>&1 \
-   && find "${vd}/r" -name verify.txt -exec grep -q 'vps-backup verify' {} +; then
+   && find "${vd}/r" -name verify.txt -exec grep -q 'kiss-backup verify' {} +; then
     say "  ✓ verified — the repo accepts a backup and restores it cleanly."
     "$RESTIC_BIN" -r "$REPO" --password-file "$PASSFILE" forget --tag verify --keep-last 1 >/dev/null 2>&1 || true
     rm -rf "$vd"
@@ -400,20 +400,20 @@ if yes "Run the first FULL backup now (otherwise the schedule handles it)?" "y/N
     # Run DETACHED so it doesn't hold the terminal and survives a disconnect — a
     # transient systemd unit (journald-logged), not a foreground/child process.
     if command -v systemd-run >/dev/null 2>&1 \
-       && systemd-run --unit=vps-backup-now --collect --description='vps-baseline first full backup' \
+       && systemd-run --unit=kiss-backup-now --collect --description='kiss-backup first full backup' \
             "$ENGINE" backup >/dev/null 2>&1; then
-        FULL_NOW="started now, in the background (systemd unit vps-backup-now)"
-        say "  ↳ started in the BACKGROUND (systemd unit 'vps-backup-now') — your terminal is free,"
+        FULL_NOW="started now, in the background (systemd unit kiss-backup-now)"
+        say "  ↳ started in the BACKGROUND (systemd unit 'kiss-backup-now') — your terminal is free,"
         say "    and it keeps running if this session disconnects."
-        say "    Watch:   journalctl -u vps-backup-now -f"
-        say "    Status:  systemctl status vps-backup-now"
+        say "    Watch:   journalctl -u kiss-backup-now -f"
+        say "    Status:  systemctl status kiss-backup-now"
     else
         say "  Couldn't start it in the background — run it yourself, detached:"
-        say "    systemd-run --unit=vps-backup-now --collect ${ENGINE} backup"
+        say "    systemd-run --unit=kiss-backup-now --collect ${ENGINE} backup"
     fi
 else
     say "OK — leaving it to the schedule. Run it any time (detached) with:"
-    say "    systemd-run --unit=vps-backup-now --collect ${ENGINE} backup"
+    say "    systemd-run --unit=kiss-backup-now --collect ${ENGINE} backup"
 fi
 
 # Confirmation email — the permanent record of what was configured + that it

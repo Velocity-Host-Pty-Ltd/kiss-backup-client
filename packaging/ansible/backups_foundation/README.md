@@ -49,7 +49,7 @@ The DB timers install only when `backups_db_enabled: true` (a second gate inside
   the nightly dump + the hypervisor/PBS snapshot, so duplicating the hourly chain
   offsite is overlap for no gain). Two generations are kept (~48h): a new full is
   built into the inactive slot and only becomes current on success, so a failed
-  full never destroys the working chain. Staging `/var/lib/vps-backups/mariabackup`
+  full never destroys the working chain. Staging `/var/lib/kiss-backups/mariabackup`
   ≈ 2×(datadir + diffs) — **monitor that filesystem.**
 - The **per-DB logical dumps** are the **offsite, long-retained** store (restic,
   GFS) and the per-tenant single-DB recovery path.

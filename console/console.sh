@@ -29,7 +29,7 @@ KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 CONSOLE_D="${KBC_CONSOLE_D:-$KBC_CONFIG_DIR/console.d}"
 BRAND="Velocity Host — Operator Console"
 TENANT_DIR="${TENANT_DIR:-/var/log/tenant-management}"
-STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/vps-backups/repo-stats}"
+STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/kiss-backups/repo-stats}"
 
 # Velocity Host palette for whiptail/newt. newt supports only the 16 NAMED colours (no hex):
 # Palette B (maintainer's pick) — BLACK text on a bright-YELLOW highlight bar (high-contrast),

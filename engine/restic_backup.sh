@@ -45,7 +45,7 @@ set -u
 
 readonly KBC_CONFIG_DIR="${KBC_CONFIG_DIR:-/etc/kiss-backup}"
 readonly BACKUP_ENV="${BACKUP_ENV:-$KBC_CONFIG_DIR/backup.env}"
-readonly TAG="vps-backup"
+readonly TAG="kiss-backup"
 
 log()  { logger -t "$TAG" -- "$*" 2>/dev/null || true; printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 die()  { log "FATAL: $*"; exit 1; }
@@ -82,8 +82,8 @@ KEEP_MONTHLY="${KEEP_MONTHLY:-12}"
 # hour-granular point-in-time; 2 generations ~48h) — NOT shipped to restic. (2)
 # per-database logical mysqldump → restic (the offsite, long-retained, per-DB store).
 # DB tools auth via unix_socket as root (passwordless OS-identity — the platform model).
-DB_STAGE="${BACKUP_DB_STAGE:-/var/lib/vps-backups/mariabackup}"
-DB_DUMP_DIR="${BACKUP_DB_DUMP_DIR:-/var/lib/vps-backups/dumps}"
+DB_STAGE="${BACKUP_DB_STAGE:-/var/lib/kiss-backups/mariabackup}"
+DB_DUMP_DIR="${BACKUP_DB_DUMP_DIR:-/var/lib/kiss-backups/dumps}"
 MARIABACKUP_BIN="${MARIABACKUP_BIN:-mariabackup}"
 MYSQL_BIN="${MYSQL_BIN:-mysql}"
 MYSQLDUMP_BIN="${MYSQLDUMP_BIN:-mysqldump}"
@@ -97,7 +97,7 @@ DB_DUMP_EXCLUDE="${BACKUP_DB_DUMP_EXCLUDE:-information_schema|performance_schema
 # cursor up to a per-run size BUDGET (does several small DBs or one big one, never
 # the whole fleet at once). Non-destructive (scratch + a throwaway temp DB, dropped).
 # The timer pins it to 1 CPU + idle IO so it can't starve sites; failure -> notify.
-DRILL_SCRATCH="${BACKUP_DRILL_SCRATCH:-/var/lib/vps-backups/drill}"
+DRILL_SCRATCH="${BACKUP_DRILL_SCRATCH:-/var/lib/kiss-backups/drill}"
 DRILL_FILE="${BACKUP_DRILL_FILE:-/etc/hostname}"          # small sentinel (must be within BACKUP_PATHS)
 DRILL_DB_IMPORT="${BACKUP_DRILL_DB_IMPORT:-1}"            # 1=import-verify dumps, 0=file check only
 DRILL_DB_BUDGET_BYTES="${BACKUP_DRILL_DB_BUDGET_BYTES:-1610612736}"  # ~1.5 GiB restored/run
@@ -192,7 +192,7 @@ clear_stale_locks() { restic_plain unlock >/dev/null 2>&1 || true; }
 # the on-demand engine waits briefly then refuses. fd 9 is held for the process lifetime.
 # Fail-open (mutex disabled + warning) if flock/the lockfile is unavailable — a missing mutex
 # must never wedge backups. The on-demand engine carries an identical helper + the same path.
-BACKUP_LOCK="${BACKUP_LOCK:-/run/lock/vps-backup.lock}"
+BACKUP_LOCK="${BACKUP_LOCK:-/run/lock/kiss-backup.lock}"
 take_backup_lock() {            # take_backup_lock nowait | <wait-seconds>
     command -v flock >/dev/null 2>&1 || { log "WARN: flock not found — backup/restore mutex disabled"; return 0; }
     exec 9>"$BACKUP_LOCK" 2>/dev/null || { log "WARN: cannot open $BACKUP_LOCK — mutex disabled"; return 0; }
