@@ -40,6 +40,10 @@
 #                                               # mode default = the adapter's (DA merge, velocity mirror)
 #                                               # restore ONE unit from the whole-box snapshots via
 #                                               # the adapter; without --yes it only prints the plan
+#   restic_backup_v1.sh stage-unit <unit> [--snapshot ID]
+#                                               # stage ONE unit's files (no DBs) into a fresh 0700 dir
+#                                               # under the restore root and print its path — for
+#                                               # browsing / single-file fetches; nothing live changes
 # Examples (real on-box path; /usr/local/bin is not on root's login PATH):
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh snapshots
 #   /usr/local/bin/vps-tooling/restic_backup_v1.sh check --read-data-subset=5%
@@ -785,6 +789,41 @@ cmd_restore_unit() {
     else log "restore of $unit done (undo: restore the pre-restore,unit-$unit snapshot)"; fi
 }
 
+# Stage one unit's files read-only for browsing (console "Browse a backup"). Prints the
+# stage dir on stdout (messages go to stderr); the caller removes it. Stages left behind by
+# a killed console are swept after a day.
+cmd_stage_unit() {
+    local unit="" fsnap="" ad p r root="" frow wd
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --snapshot) fsnap="${2:?--snapshot needs an id}"; shift 2 ;;
+            -*)         die "stage-unit: unknown option $1" ;;
+            *)          [ -z "$unit" ] || die "stage-unit: one unit at a time"; unit="$1"; shift ;;
+        esac
+    done
+    [ -n "$unit" ] || die "usage: stage-unit <unit> [--snapshot ID]"
+    ad="$(adapter_bin)"
+    "$ad" list-units | cut -f1 | grep -qxF -- "$unit" || die "no unit '$unit' — see: list-units"
+    local -a paths=() inc=()
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        if r="$(root_for_path "$p")"; then paths+=("$p"); inc+=(--include "$p"); root="${root:-$r}"; fi
+    done < <("$ad" paths-for-unit "$unit") || die "paths-for-unit $unit failed"
+    [ "${#paths[@]}" -gt 0 ] || die "no backed-up files for $unit"
+    if [ -n "$fsnap" ]; then frow="$(snap_row "$fsnap")"; else frow="$(snap_row --path "$root")"; fi
+    [ -n "$frow" ] || die "no file snapshot found${fsnap:+ with id $fsnap}"
+    fsnap="${frow%%$'\t'*}"
+
+    install -d -m 0700 "$RESTORE_ROOT"
+    find "$RESTORE_ROOT" -mindepth 1 -maxdepth 1 -name 'browse-*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
+    wd="$(mktemp -d "$RESTORE_ROOT/browse-$unit.XXXXXX")" || die "mktemp failed"
+    log "staging $unit from $fsnap (${frow#*$'\t'}) into $wd" >&2
+    restic_capped restore "$fsnap" --target "$wd" "${inc[@]}" >/dev/null 2>&1 \
+        || { rm -rf "$wd"; die "staging $unit from $fsnap failed"; }
+    printf '%s\n' "${paths[@]}" > "$wd/.kiss-paths"
+    printf '%s\n' "$wd"
+}
+
 usage() {
     sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
@@ -814,6 +853,7 @@ main() {
         list-units)    cmd_list_units "$@" ;;
         adapter-info)  cmd_adapter_info "$@" ;;
         restore-unit)  cmd_restore_unit "$@" ;;
+        stage-unit)    cmd_stage_unit "$@" ;;
         validate-excludes) cmd_validate_excludes "$@" ;;
         ""|-h|--help|help) usage 0 ;;
         *) log "unknown subcommand: $cmd"; usage 2 ;;

@@ -15,12 +15,17 @@
 #
 # Usage:
 #   restore_account.sh          (launched from kiss-console; needs root)
+#   restore_account.sh --browse (Browse a backup: stage one account's snapshot to a 0700
+#                                dir and open mc — backup left, live right — for single-file
+#                                fetches; the stage is deleted when mc exits)
 #
 
 set -u
 
 ENGINE="${ENGINE:-/usr/local/lib/kiss-backup/restic_backup.sh}"
 TITLE="Restore an account"
+BROWSE=0
+[ "${1:-}" = --browse ] && { BROWSE=1; TITLE="Browse a backup"; }
 
 # Same palette as console.sh, but only if unset — inherits the launcher's when run from
 # kiss-console, and is self-sufficient standalone (newt's default theme makes the
@@ -72,7 +77,11 @@ show() {
 command -v whiptail >/dev/null 2>&1 || { echo "whiptail not installed" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "needs root" >&2; exit 1; }
 
-out="$(mktemp)"; trap 'rm -f "$out"' EXIT
+[ "$BROWSE" -eq 0 ] || command -v mc >/dev/null 2>&1 \
+    || { echo "mc (Midnight Commander) not installed — re-run the installer or: dnf install mc" >&2; exit 1; }
+
+stage=""
+out="$(mktemp)"; trap 'rm -f "$out"; [ -n "$stage" ] && rm -rf "$stage"' EXIT
 
 # 1. Account.
 mapfile -t units < <("$ENGINE" list-units 2>"$out")
@@ -98,9 +107,28 @@ for s in "${snaps[@]}"; do
     [ "$stag" = "pre-restore" ] && label="$label  (safety copy taken before a restore)"
     smenu+=("$sid" "$label")
 done
-snap="$(ui --menu "Restore $unit from which backup?" 22 72 14 "${smenu[@]}")" || exit 0
+verb=Restore; [ "$BROWSE" -eq 1 ] && verb=Browse
+snap="$(ui --menu "$verb $unit from which backup?" 22 72 14 "${smenu[@]}")" || exit 0
 args=("$unit")
 [ "$snap" = latest ] || args+=(--snapshot "$snap")
+
+# Browse: stage the whole account (read-only copy; nothing live changes), then mc with the
+# backup on the left and the live account on the right. Copy single files across with F5.
+if [ "$BROWSE" -eq 1 ]; then
+    whiptail --title "$TITLE" --infobox "Fetching $unit's files from the backup...\n\nA large account can take a while." 8 60
+    stage="$("$ENGINE" stage-unit "${args[@]}" 2>"$out" | tail -1)"
+    if [ ! -d "$stage" ]; then
+        stage=""
+        show "staging failed" "$out"
+        exit 1
+    fi
+    first="$(head -1 "$stage/.kiss-paths")"
+    left="$stage$first"; [ -d "$left" ] || left="$stage"
+    right="$first";      [ -d "$right" ] || right="$(dirname "$first")"
+    msg "$unit's backup is staged.\n\nLeft panel:  the BACKUP ($stage)\nRight panel: the LIVE account\n\nCopy a file across with F5 (keep 'Preserve attributes' ticked). Quit mc with F10 — the staged copy is then deleted." 15
+    mc --nosubshell "$left" "$right"
+    exit 0
+fi
 
 # 3. What to restore.
 what="$(ui --menu "What should be restored for $unit?" 15 72 4 \

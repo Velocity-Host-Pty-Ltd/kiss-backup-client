@@ -1,0 +1,7 @@
+# vps-console descriptor — browse one account's backup in mc (backup left, live right) for
+# single-file fetches; the staged copy is deleted on exit (needs root).
+category="Backups"
+title="Browse a backup (fetch single files with mc)"
+command="/usr/local/lib/kiss-backup/restore_account.sh --browse"
+needs_root=1
+order=45

@@ -37,7 +37,7 @@ RESTIC_DIR="${RESTIC_DIR:-/etc/restic}"
 UNITS="kiss-backup kiss-backup-check kiss-backup-prune kiss-backup-drill
        kiss-backup-db-full kiss-backup-db-diff kiss-backup-db-dump"
 # Console menus shipped standalone.
-MENUS="30-backups.menu 35-backup-stats.menu 40-account-restore.menu"
+MENUS="30-backups.menu 35-backup-stats.menu 40-account-restore.menu 45-browse-backup.menu"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
@@ -63,7 +63,7 @@ do_uninstall() {
 # this box has (the runtime OS auto-detect, handover §8).
 install_deps() {
     local need="" pkgs="" t
-    for t in curl bzip2 whiptail flock; do command -v "$t" >/dev/null 2>&1 || need="$need $t"; done
+    for t in curl bzip2 whiptail flock mc; do command -v "$t" >/dev/null 2>&1 || need="$need $t"; done
     [ -n "$need" ] || return 0
     if command -v dnf >/dev/null 2>&1; then
         for t in $need; do case "$t" in whiptail) pkgs="$pkgs newt" ;; flock) pkgs="$pkgs util-linux" ;; *) pkgs="$pkgs $t" ;; esac; done

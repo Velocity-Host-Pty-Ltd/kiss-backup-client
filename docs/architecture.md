@@ -239,6 +239,12 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
    `KBC_DRY_RUN` / `KBC_RESTORE_MODE`. The workdir is removed on success and kept on failure.
 5. The engine holds the backup/restore mutex throughout (waits up to 10 min).
 
+**Browse (no restore).** `restic_backup.sh stage-unit <unit> [--snapshot ID]` stages the unit's
+files only (same path + snapshot rules, no DBs, no lock, no adapter `restore-unit`) into a fresh
+0700 `$BACKUP_RESTORE_ROOT/browse-<unit>.XXXXXX`, writes the staged list to `.kiss-paths`, and
+prints the dir. The console's *Browse a backup* opens it in `mc` (backup left, live right) for
+single-file fetches and deletes it on exit; stages older than a day are swept on the next run.
+
 Whole-box / bare restore remains available as an engine-level path independent of any adapter.
 
 ### 2.3 Feature toggles — not every target has databases
