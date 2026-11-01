@@ -21,32 +21,40 @@
 #   restic cache); caps via GOMAXPROCS/nice/ionice so a backup can never starve
 #   the tenant sites.
 #
-# Usage:
-#   restic_backup_v1.sh install                 # install/verify the pinned restic binary
-#   restic_backup_v1.sh init                    # init the repo (+ passphrase) if absent
-#   restic_backup_v1.sh backup                  # capped file backup of BACKUP_PATHS
-#   restic_backup_v1.sh check [--read-data-subset=N%]   # integrity check (exit code = verdict)
-#   restic_backup_v1.sh forget                  # apply GFS retention (NO prune)
-#   restic_backup_v1.sh prune                   # reclaim disk (locks repo; weekly)
-#   restic_backup_v1.sh snapshots               # list snapshots
-#   restic_backup_v1.sh db-backup [full|diff]   # mariabackup full / DIFFERENTIAL -> restic (hot, capped)
-#   restic_backup_v1.sh db-dump                 # per-database mysqldump -> restic (daily, logical)
-#   restic_backup_v1.sh restore-drill           # verify backups RESTORE (file + rotating DB import); non-destructive
-#   restic_backup_v1.sh validate-excludes       # screen the operator exclude file for dangerous (root-nuking) patterns
-#   restic_backup_v1.sh list-units              # the adapter's restorable units (e.g. DA accounts)
-#   restic_backup_v1.sh adapter-info            # the active adapter's info JSON (console uses it)
-#   restic_backup_v1.sh restore-unit <unit> [--snapshot ID] [--db-snapshot ID] [--only PATH]
-#         [--files-only|--dbs-only] [--merge|--mirror] [--dry-run] [--yes]
-#                                               # mode default = the adapter's (DA merge, velocity mirror)
-#                                               # restore ONE unit from the whole-box snapshots via
-#                                               # the adapter; without --yes it only prints the plan
-#   restic_backup_v1.sh stage-unit <unit> [--snapshot ID]
-#                                               # stage ONE unit's files (no DBs) into a fresh 0700 dir
-#                                               # under the restore root and print its path — for
-#                                               # browsing / single-file fetches; nothing live changes
-# Examples (real on-box path; /usr/local/bin is not on root's login PATH):
-#   /usr/local/bin/vps-tooling/restic_backup_v1.sh snapshots
-#   /usr/local/bin/vps-tooling/restic_backup_v1.sh check --read-data-subset=5%
+# Usage: kiss-backup <command> [options]
+#
+# Backups
+#   backup                     back up BACKUP_PATHS now
+#   db-dump                    dump each database (mysqldump) into the repo
+#   db-backup [full|diff]      on-box mariabackup chain (local only)
+#   snapshots [--compact]      list the backups in the repo
+#
+# Per-account restore (needs ADAPTER in backup.env)
+#   list-units                 the accounts that can be restored
+#   restore-unit <account>     restore one account; prints the plan unless given
+#                              --dry-run (preview) or --yes (do it). Options:
+#       --snapshot ID  --db-snapshot ID  --only PATH
+#       --files-only | --dbs-only        --merge | --mirror
+#   stage-unit <account> [--snapshot ID]
+#                              copy one account's files out of a backup into a
+#                              private folder and print it (nothing live changes)
+#
+# Maintenance
+#   check [--read-data-subset=N%]   verify the repo (exit code = verdict)
+#   forget                     apply retention (metadata only)
+#   prune                      reclaim space (weekly; locks the repo)
+#   restore-drill              prove a file + a DB restore work (non-destructive)
+#   validate-excludes          screen the exclude file for dangerous patterns
+#
+# Setup
+#   install                    install/verify the pinned restic
+#   init                       create the repo (+ passphrase) if absent
+#   adapter-info               the active adapter's info (JSON)
+#
+# Examples:
+#   kiss-backup snapshots --compact
+#   kiss-backup restore-unit kbuser --dry-run
+#   kiss-backup check --read-data-subset=5%
 #
 # Config: sourced from $BACKUP_ENV (default $KBC_CONFIG_DIR/backup.env, i.e.
 #   /etc/kiss-backup/backup.env). Run as: root (from systemd units). Exit non-zero on failure so the
@@ -60,11 +68,13 @@ readonly TAG="kiss-backup"
 
 log()  { logger -t "$TAG" -- "$*" 2>/dev/null || true; printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 die()  { log "FATAL: $*"; exit 1; }
+# The header's Usage block (stops at "# Config:", so later "# Usage:" comments don't leak in).
+print_usage() { awk '/^# Usage:/{p=1} /^# Config:/{exit} p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Help must work on ANY box, before the config is even required — short-circuit
 # here (the config block below would otherwise die without $BACKUP_ENV).
 case "${1:-}" in
-    -h|--help|help) sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help|help) print_usage; exit 0 ;;
 esac
 
 # ---- config -----------------------------------------------------------------
@@ -825,7 +835,7 @@ cmd_stage_unit() {
 }
 
 usage() {
-    sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^# \{0,1\}//'
+    print_usage
     exit "${1:-0}"
 }
 
