@@ -239,11 +239,12 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
    `KBC_DRY_RUN` / `KBC_RESTORE_MODE`. The workdir is removed on success and kept on failure.
 5. The engine holds the backup/restore mutex throughout (waits up to 10 min).
 
-**Browse (no restore).** `restic_backup.sh stage-unit <unit> [--snapshot ID]` stages the unit's
-files only (same path + snapshot rules, no DBs, no lock, no adapter `restore-unit`) into a fresh
-0700 `$BACKUP_RESTORE_ROOT/browse-<unit>.XXXXXX`, writes the staged list to `.kiss-paths`, and
-prints the dir. The console's *Browse a backup* opens it in `mc` (backup left, live right) for
-single-file fetches and deletes it on exit; stages older than a day are swept on the next run.
+**Browse (no restore, no staging).** `restic_backup.sh browse-unit <unit> [--snapshot ID]` prints
+`<snapshot-id>\t<path>` per backed-up unit path (same path + snapshot rules); `mount <dir>` is a
+read-only `restic mount`. The console's *Browse a backup* mounts the repo on a tmpfs dir under
+`/run`, opens `mc` at `<dir>/ids/<id><path>` (backup left, live right) and unmounts on exit. Nothing
+is copied locally — a file fetched with F5 is read from the repo on demand. The mount holds a shared
+repo lock, so `forget`/`prune` defer (exit 11, soft) while it is open.
 
 Whole-box / bare restore remains available as an engine-level path independent of any adapter.
 

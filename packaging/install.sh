@@ -64,14 +64,16 @@ do_uninstall() {
 install_deps() {
     local need="" pkgs="" t
     for t in curl bzip2 whiptail flock mc; do command -v "$t" >/dev/null 2>&1 || need="$need $t"; done
+    # FUSE for Browse a backup (restic mount): EL ships fusermount, Debian's fuse3 fusermount3.
+    command -v fusermount >/dev/null 2>&1 || command -v fusermount3 >/dev/null 2>&1 || need="$need fusermount"
     [ -n "$need" ] || return 0
     if command -v dnf >/dev/null 2>&1; then
-        for t in $need; do case "$t" in whiptail) pkgs="$pkgs newt" ;; flock) pkgs="$pkgs util-linux" ;; *) pkgs="$pkgs $t" ;; esac; done
+        for t in $need; do case "$t" in whiptail) pkgs="$pkgs newt" ;; fusermount) pkgs="$pkgs fuse" ;; flock) pkgs="$pkgs util-linux" ;; *) pkgs="$pkgs $t" ;; esac; done
         say "Installing missing tools:${pkgs} (dnf) ..."
         # shellcheck disable=SC2086
         dnf -y -q install $pkgs || die "dnf install failed:${pkgs}"
     elif command -v apt-get >/dev/null 2>&1; then
-        for t in $need; do case "$t" in flock) pkgs="$pkgs util-linux" ;; *) pkgs="$pkgs $t" ;; esac; done
+        for t in $need; do case "$t" in fusermount) pkgs="$pkgs fuse3" ;; flock) pkgs="$pkgs util-linux" ;; *) pkgs="$pkgs $t" ;; esac; done
         say "Installing missing tools:${pkgs} (apt) ..."
         # shellcheck disable=SC2086
         DEBIAN_FRONTEND=noninteractive apt-get -y -q install $pkgs || die "apt-get install failed:${pkgs}"

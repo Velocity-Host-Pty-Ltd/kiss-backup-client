@@ -15,9 +15,10 @@
 #
 # Usage:
 #   restore_account.sh          (launched from kiss-console; needs root)
-#   restore_account.sh --browse (Browse a backup: stage one account's snapshot to a 0700
-#                                dir and open mc — backup left, live right — for single-file
-#                                fetches; the stage is deleted when mc exits)
+#   restore_account.sh --browse (Browse a backup: mount the repo read-only (restic mount,
+#                                FUSE) and open mc — backup left, live right — for single-file
+#                                fetches. Nothing is staged: a copied file is read from the
+#                                repo on demand. Unmounted when mc exits.)
 #
 
 set -u
@@ -80,8 +81,14 @@ command -v whiptail >/dev/null 2>&1 || { echo "whiptail not installed" >&2; exit
 [ "$BROWSE" -eq 0 ] || command -v mc >/dev/null 2>&1 \
     || { echo "mc (Midnight Commander) not installed — re-run the installer or: dnf install mc" >&2; exit 1; }
 
-stage=""
-out="$(mktemp)"; trap 'rm -f "$out"; [ -n "$stage" ] && rm -rf "$stage"' EXIT
+mp=""; mpid=""
+unmount() {
+    [ -n "$mp" ] || return 0
+    fusermount -u "$mp" 2>/dev/null || fusermount3 -u "$mp" 2>/dev/null || umount "$mp" 2>/dev/null
+    [ -n "$mpid" ] && { kill "$mpid" 2>/dev/null; wait "$mpid" 2>/dev/null; }
+    rmdir "$mp" 2>/dev/null; mp=""
+}
+out="$(mktemp)"; trap 'unmount; rm -f "$out"' EXIT
 
 # 1. Account.
 mapfile -t units < <("$ENGINE" list-units 2>"$out")
@@ -112,20 +119,28 @@ snap="$(ui --menu "$verb $unit from which backup?" 22 72 14 "${smenu[@]}")" || e
 args=("$unit")
 [ "$snap" = latest ] || args+=(--snapshot "$snap")
 
-# Browse: stage the whole account (read-only copy; nothing live changes), then mc with the
-# backup on the left and the live account on the right. Copy single files across with F5.
+# Browse: mount the repo read-only (nothing copied locally), then mc with the backup on
+# the left and the live account on the right. F5 reads just that file from the repo.
 if [ "$BROWSE" -eq 1 ]; then
-    whiptail --title "$TITLE" --infobox "Fetching $unit's files from the backup...\n\nA large account can take a while." 8 60
-    stage="$("$ENGINE" stage-unit "${args[@]}" 2>"$out" | tail -1)"
-    if [ ! -d "$stage" ]; then
-        stage=""
-        show "staging failed" "$out"
+    loc="$("$ENGINE" browse-unit "${args[@]}" 2>"$out" | head -1)"
+    sid="${loc%%$'\t'*}"; first="${loc#*$'\t'}"
+    [[ "$sid" =~ ^[0-9a-f]{8}$ ]] || { show "could not find $unit in that backup" "$out"; exit 1; }
+    mp="$(mktemp -d /run/kiss-backup-browse.XXXXXX)" || exit 1
+    "$ENGINE" mount "$mp" >"$out" 2>&1 &
+    mpid=$!
+    whiptail --title "$TITLE" --infobox "Opening the backup (read-only, nothing is copied)..." 7 60
+    for _ in $(seq 60); do
+        [ -d "$mp/ids" ] && break
+        kill -0 "$mpid" 2>/dev/null || break
+        sleep 1
+    done
+    left="$mp/ids/$sid$first"
+    if [ ! -d "$left" ]; then
+        show "could not open the backup" "$out"
         exit 1
     fi
-    first="$(head -1 "$stage/.kiss-paths")"
-    left="$stage$first"; [ -d "$left" ] || left="$stage"
-    right="$first";      [ -d "$right" ] || right="$(dirname "$first")"
-    msg "$unit's backup is staged.\n\nLeft panel:  the BACKUP ($stage)\nRight panel: the LIVE account\n\nCopy a file across with F5 (keep 'Preserve attributes' ticked). Quit mc with F10 — the staged copy is then deleted." 15
+    right="$first"; [ -d "$right" ] || right="$(dirname "$first")"
+    msg "$unit's backup ($sid) is open read-only.\n\nLeft panel:  the BACKUP\nRight panel: the LIVE account\n\nCopy a file across with F5 (keep 'Preserve attributes' ticked) — only that file is fetched from the repo. Quit mc with F10 to close the backup." 15
     mc --nosubshell "$left" "$right"
     exit 0
 fi
