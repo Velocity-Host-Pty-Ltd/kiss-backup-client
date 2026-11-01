@@ -75,6 +75,11 @@ Optional verbs (engine feature-detects them via `info` capabilities, never by pr
 |-------------------|--------------------------|----------------------------------------------------------------|
 | `preflight`       | —                        | check tools/permissions the adapter needs; nonzero = not ready |
 | `owner-for-unit`  | `<unit-id>`              | print `uid:gid` to restore files as (defaults to current)      |
+
+> **Ownership on restore:** staged files keep their backup-time numeric ids. When `owner-for-unit`
+> reports a different `uid:gid` (the account was re-created), `restore_common.sh` hands only the
+> staged files that carried the old uid / gid to the current ones — other owners (mail, root,
+> diradmin) are left as they were, and a root uid on either side is never remapped.
 | `quiesce`         | `<unit-id>`              | pause/lock a unit before snapshot (e.g. mail delivery)         |
 | `unquiesce`       | `<unit-id>`              | release after snapshot; engine guarantees it runs if quiesce did |
 
