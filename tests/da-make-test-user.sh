@@ -9,15 +9,18 @@
 # Usage:  bash tests/da-make-test-user.sh [user] [domain]     # default: kbuser kbuser.test
 #
 set -euo pipefail
+trap 'echo "FAILED at line $LINENO: $BASH_COMMAND (rc $?)" >&2' ERR
 
 U="${1:-kbuser}"; DOM="${2:-$U.test}"
 DA=/usr/local/directadmin
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 [ -d "$DA/data/users/$U" ] && { echo "$U already exists — nothing done" >&2; exit 1; }
 
-API="$("$DA/directadmin" api-url 2>/dev/null | tail -1)"
+API="$("$DA/directadmin" api-url | tail -1)"
 [[ "$API" == http* ]] || { echo "could not get 'directadmin api-url' (DA too old?)" >&2; exit 1; }
-IP="$(ls "$DA/data/admin/ips/" | head -1)"
+IP="$(find "$DA/data/admin/ips/" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | head -1)"
+[ -n "$IP" ] || IP="$(hostname -I | awk '{print $1}')"
+echo "API ok, IP $IP"
 PW="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)"
 
 call() {   # call <CMD> <post-data> — prints DA's reply, fails on error=1
