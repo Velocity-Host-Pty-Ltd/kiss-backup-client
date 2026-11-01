@@ -21,7 +21,7 @@ API="$("$DA/directadmin" api-url | tail -1)"
 IP="$(find "$DA/data/admin/ips/" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | head -1)"
 [ -n "$IP" ] || IP="$(hostname -I | awk '{print $1}')"
 echo "API ok, IP $IP"
-PW="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)"
+PW="$(openssl rand -hex 8)"
 
 call() {   # call <CMD> <post-data> — prints DA's reply, fails on error=1
     local r; r="$(curl -sk "$API/$1" --data "$2")"
