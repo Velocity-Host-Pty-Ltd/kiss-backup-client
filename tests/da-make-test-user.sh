@@ -22,6 +22,9 @@ IP="$(find "$DA/data/admin/ips/" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/n
 [ -n "$IP" ] || IP="$(hostname -I | awk '{print $1}')"
 echo "API ok, IP $IP"
 PW="$(openssl rand -hex 8)"
+# DA wants a real-looking address: the admin's own, else admin@<hostname>.
+EMAIL="$(sed -n 's/^email=//p' "$DA/data/users/admin/user.conf" 2>/dev/null | head -1)"
+[[ "$EMAIL" == *@*.* ]] || EMAIL="admin@$(hostname -f)"
 
 call() {   # call <CMD> <post-data> — prints DA's reply, fails on error=1
     local r; r="$(curl -sk "$API/$1" --data "$2")"
@@ -34,7 +37,7 @@ lim=""
 for k in bandwidth quota vdomains nsubdomains nemails nemailf nemailml nemailr mysql domainptr ftp; do
     lim="$lim&u$k=ON"
 done
-call CMD_API_ACCOUNT_USER "action=create&add=Submit&username=$U&email=root@localhost&passwd=$PW&passwd2=$PW&domain=$DOM&ip=$IP&notify=no&aftp=OFF&cgi=ON&php=ON&spam=ON&cron=ON&ssl=ON&ssh=OFF&sysinfo=OFF&dnscontrol=ON$lim"
+call CMD_API_ACCOUNT_USER "action=create&add=Submit&username=$U&email=$EMAIL&passwd=$PW&passwd2=$PW&domain=$DOM&ip=$IP&notify=no&aftp=OFF&cgi=ON&php=ON&spam=ON&cron=ON&ssl=ON&ssh=OFF&sysinfo=OFF&dnscontrol=ON$lim"
 
 # The DB is the user's own — create it with the new account's login.
 UAPI="$(printf '%s' "$API" | sed "s#://[^@]*@#://$U:$PW@#")"
