@@ -46,6 +46,8 @@ kiss-backup restore-unit "$U" --dbs-only --db-snapshot "$C1" --mirror --yes --no
 [ "$(dbv)" = 1 ] && ok "DB back to 1 from the DB checkpoint" || bad "DB is $(dbv) after restoring $C1"
 
 step "2. full checkpoint -> damage files + DB -> restore both from it"
+# A value no scheduled dump holds, so only the checkpoint can bring it back.
+mysql -e "UPDATE $DB.t SET v=5"
 kiss-backup checkpoint "$U" --kind full --label full-ckpt >> /root/ckpt-test.log 2>&1
 C2="$(ckid /root/ckpt-test.log)"
 [ -n "$C2" ] && [ "$C2" != "$C1" ] && ok "full checkpoint saved ($C2)" || { bad "full checkpoint failed"; exit 1; }
@@ -55,7 +57,7 @@ grep -q "databases from $C2" /root/ckpt-test-full.log && ok "DBs paired with the
     || bad "DBs not taken from the checkpoint: $(grep 'databases from' /root/ckpt-test-full.log)"
 [ "$(cat "$F")" = v1 ] && ok "kbtest.txt back to v1" || bad "kbtest.txt is $(cat "$F")"
 [ ! -e "$P" ] && ok "planted.php removed" || bad "planted.php still there"
-[ "$(dbv)" = 1 ] && ok "DB back to 1" || bad "DB is $(dbv)"
+[ "$(dbv)" = 5 ] && ok "DB back to 5 (the checkpoint's value, not a daily dump's)" || bad "DB is $(dbv) (want 5)"
 
 step "3. restore-point lists"
 kiss-backup points "$U" db > /root/ckpt-test-points-db.txt 2>&1

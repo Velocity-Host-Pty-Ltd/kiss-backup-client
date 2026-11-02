@@ -739,9 +739,12 @@ cmd_restore_unit() {
     if [ "$do_dbs" -eq 1 ] && [ -z "$dsnap" ] && [ -n "$fsnap" ]; then
         # A checkpoint / safety copy of THIS unit that holds its DB dumps (kind full or db)
         # pairs with itself: files + DBs from the same moment.
-        case " $(snap_tags "$fsnap") " in
-            *" unit-$unit "*" kind-full "*|*" kind-full "*" unit-$unit "*|*" unit-$unit "*" kind-db "*|*" kind-db "*" unit-$unit "*) dsnap="$fsnap" ;;
-        esac
+        # (each tag tested on its own: adjacent tags share one space, so one combined
+        # pattern like *" unit-x "*" kind-full "* can never match)
+        local ftags; ftags=" $(snap_tags "$fsnap") "
+        if [[ "$ftags" == *" unit-$unit "* ]] && [[ "$ftags" == *" kind-full "* || "$ftags" == *" kind-db "* ]]; then
+            dsnap="$fsnap"
+        fi
     fi
     if [ "$do_dbs" -eq 1 ]; then
         if [[ "$dsnap" == hourly:* ]]; then
