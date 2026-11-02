@@ -2,14 +2,13 @@
 #
 # verify-restore-owner-remap.sh
 # -----------------------------
-# Unit check for adapters/lib/restore_common.sh rc_remap_owner: when the account's
-# current uid:gid differs from its backup-time owner (KBC_BACKUP_OWNER, from the engine),
-# only the restored files that carry the OLD ids are handed over (others — mail:mail, root — keep theirs),
-# a dry run reports and changes nothing, and a same-owner or root case is a no-op.
+# Unit check for adapters/lib/restore_common.sh rc_remap_owner: given the engine's
+# <wd>/idmap (user/group ids that moved since the backup, matched by name), only the
+# restored files carrying an old id are re-owned, only inside the unit's areas; an empty
+# map, a dry run and a root entry change nothing.
 #
-# Runs unprivileged: chown/chgrp are replaced by logging stubs on PATH, and the "current"
-# owner is faked by the stub v_owner_for_unit. The real chown is proven on a test box by a
-# restore after re-creating the account (HANDOVER §14 step 6d).
+# Runs unprivileged: chown is replaced by a logging stub on PATH. The real chown is proven
+# on a test box by a restore after re-creating the account (HANDOVER §14 step 6d).
 #
 # Usage:  bash tests/verify-restore-owner-remap.sh
 #
@@ -23,18 +22,16 @@ ok()  { printf 'PASS  %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
 mkdir -p "$T/bin"
-for c in chown chgrp; do
-    printf '#!/bin/sh\necho "%s $*" >> "%s/log"\n' "$c" "$T" > "$T/bin/$c"; chmod +x "$T/bin/$c"
-done
+printf '#!/bin/sh\necho "chown $*" >> "%s/log"\n' "$T" > "$T/bin/chown"; chmod +x "$T/bin/chown"
 
-ME="$(id -u):$(id -g)"
-run() {   # run <current-owner> <dry>
-    : > "$T/log"
-    PATH="$T/bin:$PATH" CUR="$1" DRY="$2" WD="$T/wd" LIVE="$T/live" KBC_BACKUP_OWNER="$ME" bash -c '
+U="$(id -u)"; G="$(id -g)"
+run() {   # run <dry> <idmap lines...>
+    local dry="$1"; shift
+    : > "$T/log"; printf '%s\n' "$@" | sed '/^$/d' > "$T/wd/idmap"
+    PATH="$T/bin:$PATH" DRY="$dry" WD="$T/wd" LIVE="$T/live" bash -c '
         err() { printf "%s\n" "$*" >&2; }
         die() { shift; err "$*"; exit 3; }
         allowed_roots() { printf "%s\n" "$LIVE/home/u1"; }
-        v_owner_for_unit() { printf "%s\n" "$CUR"; }
         . "'"$HERE"'/../adapters/lib/restore_common.sh"
         rc_remap_owner u1 "$WD" "$DRY"' 2> "$T/err"
 }
@@ -43,26 +40,26 @@ mkdir -p "$T/wd" "$T/live/home/u1/sub" "$T/live/etc/elsewhere"
 touch "$T/live/home/u1/a" "$T/live/home/u1/sub/b" "$T/live/etc/elsewhere/x"
 printf '%s\n' "$T/live/home/u1" "$T/live/etc/elsewhere" > "$T/wd/paths"
 
-run "$ME" 0
-[ ! -s "$T/log" ] && ok "same owner → no chown" || bad "same owner chowned: $(cat "$T/log")"
+run 0 ""
+[ ! -s "$T/log" ] && ok "empty map → no chown" || bad "empty map chowned: $(cat "$T/log")"
 
-run "4242:4343" 1
-[ ! -s "$T/log" ] && grep -q "would be handed over" "$T/err" \
+run 1 "u $U 4242 u1" "g $G 4343 u1"
+[ ! -s "$T/log" ] && grep -q "would be applied" "$T/err" \
     && ok "dry run reports, changes nothing" || bad "dry run: $(cat "$T/log" "$T/err")"
 
-run "4242:4343" 0
-n="$(grep -c '^chown -h 4242 ' "$T/log")"; g="$(grep -c '^chgrp -h 4343 ' "$T/log")"
-[ "$n" -ge 1 ] && [ "$g" -ge 1 ] && grep -q "handed over" "$T/err" \
-    && ok "new owner → chown + chgrp of old-id files" || bad "remap: $(cat "$T/log" "$T/err")"
-grep -q elsewhere "$T/log" && bad "touched a path outside the unit's areas" \
-    || ok "outside paths untouched"
+run 0 "u $U 4242 u1" "g $G 4343 u1"
+n="$(grep -c "^chown -h 4242:4343 " "$T/log")"
+[ "$n" = 4 ] && ok "user + group moved → all 4 restored entries re-owned" || bad "remap ($n): $(cat "$T/log" "$T/err")"
+grep -q elsewhere "$T/log" && bad "touched a path outside the unit's areas" || ok "outside paths untouched"
 
-run "4242:$(id -g)" 0
-grep -q '^chgrp' "$T/log" && bad "chgrp ran though gid unchanged" \
-    || { grep -q '^chown' "$T/log" && ok "uid-only change → chown only"; } || bad "uid-only: $(cat "$T/log")"
+run 0 "g $G 4343 access"
+grep -q "^chown -h $U:4343 " "$T/log" && ! grep -qv "^chown -h $U:4343 " "$T/log" \
+    && ok "group-only move keeps the uid" || bad "group-only: $(cat "$T/log")"
 
-run "0:0" 0
-[ ! -s "$T/log" ] && grep -q "not remapping root" "$T/err" \
-    && ok "root target → refused" || bad "root: $(cat "$T/log" "$T/err")"
+run 0 "u 999999 4242 other"
+[ ! -s "$T/log" ] && ok "a moved id no file carries → nothing" || bad "unrelated id: $(cat "$T/log")"
+
+run 0 "u 0 4242 root" "u $U 0 x"
+[ ! -s "$T/log" ] && ok "root entries ignored" || bad "root: $(cat "$T/log")"
 
 exit "$fail"

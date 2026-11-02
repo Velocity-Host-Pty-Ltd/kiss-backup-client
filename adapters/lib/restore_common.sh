@@ -12,12 +12,11 @@
 #   err "msg"                     print a diagnostic to stderr
 #   die <rc> "msg"                print + exit
 #   allowed_roots <unit> <wd>     the absolute areas this unit may restore into
-#   v_owner_for_unit <unit>       the account's current uid:gid
 #   MYSQL_BIN                     mysql client (root via unix_socket)
 #
-# Workdir (from the engine): <wd>/paths (the paths restored in place), <wd>/dbs/<db>.sql.
-# Env: KBC_DRY_RUN=1 (show only), KBC_RESTORE_MODE=merge|mirror,
-#      KBC_BACKUP_OWNER=<uid:gid> the unit's owner as recorded in the backup (may be empty).
+# Workdir (from the engine): <wd>/paths (the paths restored in place), <wd>/dbs/<db>.sql,
+#   <wd>/idmap ("u|g <old-id> <new-id> <name>" per user/group whose id moved since the backup).
+# Env: KBC_DRY_RUN=1 (show only), KBC_RESTORE_MODE=merge|mirror.
 
 # The restored paths (<wd>/paths) that fall inside one of the unit's areas — never
 # through '..', never outside, so a crafted workdir can't widen the owner hand-over.
@@ -38,33 +37,36 @@ rc_staged_paths() {
     done < "$wd/paths"
 }
 
-# Restored files carry the backup-time numeric uid/gid (restic restores ids, as root). If
-# the account was re-created since, or this is a rebuilt server, the current ids differ:
-# hand the files that carry the OLD ids to the current ones — only those ids, so files
-# owned by others (user:mail mail dirs, root, diradmin) keep theirs. Normally a no-op.
+# Restored files carry their backup-time numeric ids. Where a user or group's id moved since
+# (re-created account, rebuilt server — the engine's <wd>/idmap, matched by name), re-own the
+# restored files that carry an old id. One pass per path, each file mapped from its ORIGINAL
+# ids, so chained moves (A->B, B->C) can't double-map. Files whose ids didn't move (other
+# owners, root) are untouched. Normally the map is empty and this is a no-op.
 rc_remap_owner() {
-    local u="$1" wd="$2" dry="$3" p cur ou og nu ng old="${KBC_BACKUP_OWNER:-}"
-    [ -n "$old" ] || return 0
-    cur="$(v_owner_for_unit "$u")" || die 3 "cannot resolve $u's current owner"
-    nu="${cur%%:*}"; ng="${cur##*:}"; ou="${old%%:*}"; og="${old##*:}"
-    [[ "$nu$ng$ou$og" =~ ^[0-9]+$ ]] || die 3 "bad owner ids for $u ($old -> $cur)"
-    [ "$ou:$og" = "$nu:$ng" ] && return 0
-    if [ "$ou" = 0 ] || [ "$nu" = 0 ]; then
-        err "owner: $u was $ou:$og in the backup, is $nu:$ng now — not remapping root"
-        return 0
-    fi
-    if [ "$dry" = 1 ]; then
-        err "owner: $u was $ou:$og in the backup, is $nu:$ng now — files would be handed over"
-        return 0
-    fi
+    local u="$1" wd="$2" dry="$3" kind old new p fu fg f nu ng cnt=0
+    local -A um=() gm=()
+    [ -s "$wd/idmap" ] || return 0
+    local -a expr=()
+    while read -r kind old new _; do
+        [[ "$old$new" =~ ^[0-9]+$ ]] && [ "$old" != 0 ] && [ "$new" != 0 ] || continue
+        if [ "$kind" = u ]; then um[$old]="$new"; expr+=(-o -uid "$old")
+        elif [ "$kind" = g ]; then gm[$old]="$new"; expr+=(-o -gid "$old"); fi
+    done < "$wd/idmap"
+    [ "${#expr[@]}" -gt 0 ] || return 0
+    expr=("${expr[@]:1}")                       # drop the leading -o
+    # Dry run: nothing is restored yet, so there is nothing to count — the engine's
+    # preview already lists each moved id.
+    [ "$dry" = 1 ] && { err "owner: $(wc -l < "$wd/idmap") id change(s) would be applied to the restored files"; return 0; }
     while IFS= read -r p; do
         [ -e "$p" ] || continue
-        [ "$ou" = "$nu" ] || find "$p" -xdev -uid "$ou" -exec chown -h "$nu" {} + \
-            || die 3 "chown in $p failed"
-        [ "$og" = "$ng" ] || find "$p" -xdev -gid "$og" -exec chgrp -h "$ng" {} + \
-            || die 3 "chgrp in $p failed"
+        while IFS= read -r -d '' fu && IFS= read -r -d '' fg && IFS= read -r -d '' f; do
+            nu="${um[$fu]:-$fu}"; ng="${gm[$fg]:-$fg}"
+            [ "$nu:$ng" = "$fu:$fg" ] && continue
+            cnt=$((cnt + 1))
+            chown -h "$nu:$ng" "$f" || die 3 "chown $f failed"
+        done < <(find "$p" -xdev \( "${expr[@]}" \) -printf '%U\0%G\0%p\0')
     done < <(rc_staged_paths "$u" "$wd" 2>/dev/null)
-    err "owner: $u was $ou:$og in the backup, is $nu:$ng now — restored files handed over"
+    err "owner: $cnt restored file(s) re-owned to today's ids"
 }
 
 # A mysqldump that finished writes "-- Dump completed" as its last comment; a truncated

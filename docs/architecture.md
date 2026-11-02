@@ -229,8 +229,10 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
    console confirms, the CLI must opt in.
 2. **Check before any write.** The account must have a system user + group now (`owner-for-unit`
    → `/etc/passwd`, `/etc/group`) or the restore refuses ("re-create the account in the panel
-   first"). Its backup-time owner is read from the snapshot (`restic ls`); a difference is reported
-   in the preview. Each unit path must be absolute, clean, and strictly inside a backup root (never
+   first"). The snapshot's `/etc/passwd` + `/etc/group` are compared with the live ones **by name**;
+   every user/group whose id moved (re-created account, rebuilt server — the unit's own, DA's
+   `access`, `mail`…) goes into `<workdir>/idmap` and is listed in the preview. Normally it's empty.
+   (Not the home dir's owner: on DA `/home/<user>` is `user:access`, so its group is shared.) Each unit path must be absolute, clean, and strictly inside a backup root (never
    a root itself — `/home` with `--delete` would rewrite every account).
 3. **Stage only the DB dumps** into `$BACKUP_RESTORE_ROOT/<unit>.XXXXXX` (default
    `/var/lib/kiss-backups/restore`): `<workdir>/dbs/<name>.sql`, plus `<workdir>/paths` (the paths
@@ -251,9 +253,9 @@ The engine turns that into: snapshot those paths, dump those DBs, tag the restic
    3; 30 s, 60 s apart). On the last failure: `<unit>.failed` in `$BACKUP_RESTORE_STATE` (default
    `/var/lib/kiss-backups/restore-status`) — the console shows it on open — and an `ops-alert` mail
    via `notify.sh`. Re-running resumes. A later successful restore clears the marker.
-7. **`restore-unit <unit-id> <workdir>`** — the adapter's post-restore half: hand restored files to a
-   re-created account's new uid/gid (`KBC_BACKUP_OWNER` → current owner; only the old ids, so
-   `user:mail` / root / diradmin owners keep theirs), import the dumps, and run panel follow-ups
+7. **`restore-unit <unit-id> <workdir>`** — the adapter's post-restore half: re-own the restored files
+   that carry an id from `idmap` (one pass, each file mapped from its original ids; untouched ids
+   and root keep theirs), import the dumps, and run panel follow-ups
    (DA: httpd rewrite, DNS reload). Honours `KBC_DRY_RUN` / `KBC_RESTORE_MODE`. The workdir is
    removed on success and kept on failure.
 8. The engine holds the backup/restore mutex throughout (waits up to 10 min). The console runs the

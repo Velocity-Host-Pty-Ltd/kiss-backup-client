@@ -761,16 +761,12 @@ cmd_restore_unit() {
     # (/etc/passwd, /etc/group). Files come back with their backup-time numeric ids; if
     # the account was re-created (or this is a rebuilt server) those differ, and the
     # adapter hands the restored files over afterwards.
-    local own="" bown=""
+    local own=""
     if [ "$do_files" -eq 1 ]; then
         own="$("$ad" owner-for-unit "$unit" 2>/dev/null)" && [[ "$own" =~ ^[0-9]+:[0-9]+$ ]] \
             || restore_fail "$unit" "$unit has no system user in /etc/passwd — re-create the account in the control panel first, then restore"
         getent group "${own#*:}" >/dev/null \
             || restore_fail "$unit" "group ${own#*:} of $unit is not in /etc/group — fix the account first"
-        bown="$(snap_owner "$fsnap" "${paths[0]}")"
-        if [ -z "$bown" ]; then log "  owner: could not read ${paths[0]}'s owner in $fsnap — no remap"
-        elif [ "$bown" = "$own" ]; then log "  owner: $own (same as in the backup)"
-        else log "  owner: backup $bown, live $own — restored files will be handed to $own"; fi
     fi
 
     # The workdir now only carries the DB dumps + the list of restored paths (files go
@@ -778,7 +774,10 @@ cmd_restore_unit() {
     install -d -m 0700 "$RESTORE_ROOT"
     local wd; wd="$(mktemp -d "$RESTORE_ROOT/$unit.XXXXXX")" || die "mktemp failed"
     install -d -m 0700 "$wd/dbs"
-    [ "$do_files" -eq 1 ] && printf '%s\n' "${paths[@]}" > "$wd/paths"
+    if [ "$do_files" -eq 1 ]; then
+        printf '%s\n' "${paths[@]}" > "$wd/paths"
+        build_id_map "$fsnap" "$wd" "$unit" "$own" "${paths[0]}"
+    fi
 
     if [ "$do_dbs" -eq 1 ]; then
         local -a dinc=()
@@ -831,7 +830,6 @@ cmd_restore_unit() {
     fi
 
     KBC_SNAPSHOT="$fsnap" KBC_WORKDIR="$wd" KBC_DRY_RUN="$dry" KBC_RESTORE_MODE="$mode" \
-        KBC_BACKUP_OWNER="$bown" \
         "$ad" restore-unit "$unit" "$wd" || restore_fail "$unit" "adapter restore-unit failed (workdir kept: $wd)"
     rm -rf "$wd"
     if [ "$dry" -eq 1 ]; then log "dry run done — nothing changed"
@@ -842,11 +840,40 @@ cmd_restore_unit() {
     fi
 }
 
-# The numeric "uid:gid" of <path> as recorded in <snapshot>, or nothing.
-snap_owner() {
-    restic_plain ls --json "$1" "$2" 2>/dev/null \
-        | grep -F "\"path\":\"$2\"" | head -1 \
-        | sed -n 's/.*"uid":\([0-9]*\).*"gid":\([0-9]*\).*/\1:\2/p'
+# Files come back with their backup-time numeric ids. Those only differ from today's when
+# the account was re-created or the server rebuilt. Compare the snapshot's /etc/passwd and
+# /etc/group with the live ones BY NAME and write <wd>/idmap ("u|g <old> <new> <name>") for
+# every user/group whose id moved — the unit's own, but also e.g. DA's 'access' (the home
+# dir's group) or 'mail'. The adapter applies it to the restored paths only. Root never moves.
+build_id_map() {
+    local snap="$1" wd="$2" unit="$3" own="$4" first="$5" kind db name id cur n=0 bu
+    : > "$wd/idmap"
+    if restic_plain dump "$snap" /etc/passwd > "$wd/b.passwd" 2>/dev/null && [ -s "$wd/b.passwd" ] \
+       && restic_plain dump "$snap" /etc/group > "$wd/b.group" 2>/dev/null && [ -s "$wd/b.group" ]; then
+        for kind in u g; do
+            if [ "$kind" = u ]; then db=passwd; else db=group; fi
+            while IFS=: read -r name _ id _; do
+                [[ "$id" =~ ^[0-9]+$ ]] && [ "$id" != 0 ] || continue
+                cur="$(getent "$db" "$name" | cut -d: -f3)"
+                [[ "$cur" =~ ^[0-9]+$ ]] && [ "$cur" != 0 ] && [ "$cur" != "$id" ] || continue
+                printf '%s %s %s %s\n' "$kind" "$id" "$cur" "$name" >> "$wd/idmap"
+            done < "$wd/b.$db"
+        done
+    else
+        # No passwd/group in the snapshot (custom BACKUP_PATHS): fall back to the unit's
+        # home owner uid only — its group can't be told apart from a shared one ('access').
+        bu="$(restic_plain ls --json "$snap" "$first" 2>/dev/null | grep -F "\"path\":\"$first\"" \
+            | head -1 | sed -n 's/.*"uid":\([0-9]*\).*/\1/p')"
+        [ -n "$bu" ] && [ "$bu" != 0 ] && [ "$bu" != "${own%%:*}" ] \
+            && printf 'u %s %s %s\n' "$bu" "${own%%:*}" "$unit" >> "$wd/idmap"
+        log "  owner: no /etc/passwd + /etc/group in $snap — checking $unit's uid only"
+    fi
+    rm -f "$wd/b.passwd" "$wd/b.group"
+    while read -r kind id cur name; do
+        n=$((n + 1))
+        log "  owner: $([ "$kind" = u ] && echo user || echo group) $name was $id in the backup, is $cur now — restored files follow"
+    done < "$wd/idmap"
+    [ "$n" -gt 0 ] || log "  owner: user + group ids match the backup — files keep their owners"
 }
 
 # Run a restic step up to RESTORE_ATTEMPTS times (30 s, 60 s, ... between) — a dropped
