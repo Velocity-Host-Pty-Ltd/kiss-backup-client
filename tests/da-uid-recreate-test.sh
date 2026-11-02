@@ -7,8 +7,7 @@
 #   end to end and prints PASS/FAIL — no copy-pasting. Picks up from wherever it is:
 #     1. finds the newest backup that still has <user> in its /etc/passwd (+ the old ids);
 #     2. deletes <user> in DA if it still exists;
-#     3. removes the placeholder for now — this DA build counts Unix users against the
-#        license, so it would block the re-create;
+#     3. removes the placeholder for now (it gets the old ids back in step 5);
 #     4. re-creates <user> (tests/da-make-test-user.sh);
 #     5. moves <user> to new ids (usermod/groupmod — as on a rebuilt server) and puts a
 #        placeholder user on the old ids, so they belong to someone else;
@@ -57,7 +56,7 @@ if [ -d "$DA/data/users/$U" ]; then
     echo "deleted"
 else echo "already gone"; fi
 
-step "3. free DA's license slot (this DA build counts Unix users too)"
+step "3. no placeholder while DA creates the account"
 if id "$HOLD" >/dev/null 2>&1; then userdel "$HOLD" && echo "removed $HOLD for now"; fi
 getent group "$HOLD" >/dev/null && groupdel "$HOLD"
 
@@ -65,6 +64,13 @@ step "4. re-create $U (waits for DA's account limit, up to 3 min)"
 for i in 1 2 3 4 5 6 7; do
     out="$(bash "$HERE/da-make-test-user.sh" "$U" 2>&1)" && break
     if grep -q 'License is limited' <<<"$out" && [ "$i" -lt 7 ]; then
+        # Seen on DA 1.713: the deleted account kept counting until DA's user cache was
+        # rebuilt and DA restarted.
+        if [ "$i" = 1 ]; then
+            echo "DA still counts the deleted account — rebuilding its user cache + restarting DA"
+            echo "action=cache&value=showallusers" >> "$DA/data/task.queue"
+            "$DA/dataskq" d >/dev/null 2>&1; systemctl restart directadmin; sleep 5; continue
+        fi
         echo "DA still counts the deleted account — waiting 30 s ($i/6)"; sleep 30; continue
     fi
     echo "$out"

@@ -125,6 +125,7 @@ v_restore_unit() {
     md="$(rc_mode "$wd")" || exit $?          # a die in rc_mode must stop the restore
     read -r mode dry <<< "$md"
     rc_remap_owner "$u" "$wd" "$dry"           # files are already back (engine, restic)
+    da_fix_mail_ids "$u" "$wd" "$dry"
     rc_restore_dbs "$u" "$wd" "$mode" "$dry"      # DA databases are <user>_*
 
     [ "$dry" = 1 ] && return 0
@@ -138,6 +139,31 @@ v_restore_unit() {
         { rndc reload >/dev/null 2>&1 || systemctl reload named >/dev/null 2>&1; } \
             && err "reloaded DNS" || err "could not reload named — reload it by hand"
     fi
+}
+
+# DA's virtual-mail login files (/etc/virtual/<domain>/passwd: user:hash:uid:gid:...) carry
+# numeric ids INSIDE the text, which a restore brings back as they were. If the account's
+# ids moved (<wd>/idmap), rewrite fields 3/4 so Dovecot doesn't open the mailboxes as the
+# old id's new owner. Rewritten in place (same inode, owner and mode).
+da_fix_mail_ids() {
+    local u="$1" wd="$2" dry="$3" p f tmp n
+    [ -s "$wd/idmap" ] || return 0
+    while IFS= read -r p; do
+        case "$p" in "$VIRTUAL_DIR"/*) ;; *) continue ;; esac
+        f="$p/passwd"
+        [ -s "$f" ] || continue
+        tmp="$(mktemp)" || die 3 "mktemp failed"
+        n="$(awk -F: -v OFS=: -v map="$wd/idmap" -v out="$tmp" '
+            BEGIN { while ((getline l < map) > 0) { split(l, a, " ");
+                        if (a[1] == "u") um[a[2]] = a[3]; else if (a[1] == "g") gm[a[2]] = a[3] } }
+            { if ($3 in um) { $3 = um[$3]; c++ } ; if ($4 in gm) { $4 = gm[$4]; c++ } ; print > out }
+            END { print c + 0 }' "$f")"
+        if [ "$n" -gt 0 ]; then
+            if [ "$dry" = 1 ]; then err "mail: $f — $n id field(s) would be updated to today's ids"
+            else cat "$tmp" > "$f" || die 3 "rewrite $f failed"; err "mail: $f — $n id field(s) updated to today's ids"; fi
+        fi
+        rm -f "$tmp"
+    done < <(rc_staged_paths "$u" "$wd" 2>/dev/null)
 }
 
 # Areas an account may restore into: its home, its DA config, and the mail / DNS of its
