@@ -24,8 +24,10 @@ mkdir -p "$OUT"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 printf '%s\n' "$VER" > "$tmp/VERSION"
 git archive --format=tar --prefix="$NAME/" "$TAG" > "$tmp/$NAME.tar"
-# Reproducible: VERSION gets the tag commit's time and root ownership, so the same tag builds
-# the same bytes anywhere (git archive already does this for the tracked files).
+# Deterministic: VERSION gets the tag commit's time and root ownership, so the same tag gives
+# the same files everywhere and the same bytes with the same git/tar/gzip versions (archive
+# headers differ between versions — e.g. GitHub's Ubuntu runner vs Debian). To compare two
+# builds, compare their contents (tar x both, diff -r), not their checksums.
 tar --append -f "$tmp/$NAME.tar" --transform "s,^,$NAME/," --mtime="@$(git log -1 --format=%ct "$TAG")" \
     --owner=0 --group=0 --numeric-owner -C "$tmp" VERSION
 gzip -9n < "$tmp/$NAME.tar" > "$OUT/$NAME.tar.gz"
