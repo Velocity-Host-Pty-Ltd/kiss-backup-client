@@ -106,6 +106,24 @@ n="$(R snapshots --compact --tag pre-restore 2>/dev/null | grep -c pre-restore)"
 "$E" restore-unit root --mirror --dry-run > "$T/out" 2>&1 \
     && bad "whole-root unit path accepted" || { grep -q "whole backup root" "$T/out" && ok "whole-root unit path refused"; }
 
+# Checkpoints + restore points (headless "a checkpoint is a checkpoint").
+"$E" restore-unit u1 --mirror --yes --no-safety-snapshot > /dev/null 2>&1      # u1 back to the backup
+"$E" checkpoint u1 --kind files --label pre-change > "$T/out" 2>&1
+ck="$(sed -n 's/.*checkpoint saved: \([0-9a-f]\{8\}\).*/\1/p' "$T/out")"
+[ -n "$ck" ] && ok "checkpoint saved ($ck)" || bad "checkpoint: $(tail -3 "$T/out")"
+"$E" checkpoint u2 --kind files --label other-account > /dev/null 2>&1
+"$E" points u1 files > "$T/pts" 2>&1
+grep -q "^$ck	.*checkpoint	pre-change$" "$T/pts" && ok "points lists the checkpoint with its label" || bad "points: $(cat "$T/pts")"
+grep -q "other-account" "$T/pts" && bad "points shows another account's checkpoint" || ok "another account's checkpoint is not listed"
+grep -q "scheduled backup" "$T/pts" && ok "points lists the scheduled backups too" || bad "no scheduled backups in points"
+[ "$(head -1 "$T/pts" | cut -f1)" = "$ck" ] && ok "newest first" || bad "order: $(head -2 "$T/pts")"
+echo damaged > "$B/home/u1/b"; echo x > "$B/home/u1/after-ckpt"
+"$E" restore-unit u1 --snapshot "$ck" --mirror --yes --no-safety-snapshot > "$T/out" 2>&1
+[ "$(cat "$B/home/u1/b")" = b ] && [ ! -e "$B/home/u1/after-ckpt" ] \
+    && ok "restore from the checkpoint (mirror)" || bad "checkpoint restore: $(tail -4 "$T/out")"
+"$E" restore-unit u1 --mirror --yes > /dev/null 2>&1
+"$E" points u1 files | grep -q "safety copy" && ok "a restore's safety copy is a restore point" || bad "safety copy not in points"
+
 env_file "$T/failrestic"
 "$E" restore-unit u1 --merge --yes --no-safety-snapshot > "$T/out" 2>&1 \
     && bad "failing repo reported success" || { [ -s "$T/rr/status/u1.failed" ] && ok "repo failure → u1.failed"; } \

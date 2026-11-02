@@ -33,11 +33,19 @@
 #   list-units                 the accounts that can be restored
 #   restore-unit <account>     restore one account; prints the plan unless given
 #                              --dry-run (preview) or --yes (do it). Options:
-#       --snapshot ID  --db-snapshot ID  --only PATH
+#       --snapshot ID  --db-snapshot ID|hourly:<gen>/<point>  --only PATH
 #       --files-only | --dbs-only        --merge | --mirror
 #       --no-safety-snapshot   skip the pre-restore snapshot (can't be undone)
 #                              Files go straight back in place (no local copy); a
 #                              dropped repo link is retried 3x, then the owner is mailed.
+#   checkpoint <account> [--kind full|db|files] [--label TEXT]
+#                              save a restore point for one account now (e.g. before
+#                              a plugin update); full = files + databases, same moment
+#   points <account> files|db [--hourly]
+#                              the account's restore points, newest first: scheduled
+#                              backups, checkpoints, safety copies; --hourly adds the
+#                              on-server hourly DB snapshots (hourly:<gen>/<point>,
+#                              experimental — restore with --db-snapshot hourly:…)
 #   browse-unit <account> [--snapshot ID]
 #                              print "<snapshot-id> <path>" per account path — where to
 #                              look under a `kiss-backup mount` (console: Browse a backup)
@@ -135,6 +143,15 @@ DRILL_CURSOR="$DRILL_SCRATCH/.cursor"
 ADAPTER="${ADAPTER:-}"
 ADAPTER_DIR="${KBC_ADAPTER_DIR:-/usr/local/lib/kiss-backup/adapters}"
 RESTORE_ROOT="${BACKUP_RESTORE_ROOT:-/var/lib/kiss-backups/restore}"
+# On-demand checkpoints (and the pre-restore safety copy) dump an account's DBs here, so
+# every DB restore point in the repo has its dumps at a known path.
+CKPT_ROOT="${BACKUP_CHECKPOINT_DIR:-/var/lib/kiss-backups/checkpoint}"
+# Hourly per-account DB restore from the on-server mariabackup chain prepares a copy of the
+# whole instance here (needs ~ instance size free) and runs a throwaway server on it.
+PITR_ROOT="${BACKUP_PITR_SCRATCH:-/var/lib/kiss-backups}"
+MARIADBD_BIN="${MARIADBD_BIN:-$(command -v mariadbd || command -v mysqld || ls /usr/sbin/mariadbd /usr/sbin/mysqld /usr/libexec/mysqld 2>/dev/null | head -1)}"
+MYSQLADMIN_BIN="${MYSQLADMIN_BIN:-$(command -v mariadb-admin || command -v mysqladmin || echo mysqladmin)}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo /usr/libexec/platform-python)}"
 RESTORE_STATE="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}"   # <unit>.failed
 RESTORE_ATTEMPTS="${BACKUP_RESTORE_ATTEMPTS:-3}"
 RESTORE_LOG="${RESTORE_ROOT}/.restic-last.log"
@@ -719,8 +736,17 @@ cmd_restore_unit() {
         [ -n "$frow" ] || die "no file snapshot found${fsnap:+ with id $fsnap}"
         fsnap="${frow%%$'\t'*}"; ftime="${frow#*$'\t'}"
     fi
+    if [ "$do_dbs" -eq 1 ] && [ -z "$dsnap" ] && [ -n "$fsnap" ]; then
+        # A checkpoint / safety copy of THIS unit that holds its DB dumps (kind full or db)
+        # pairs with itself: files + DBs from the same moment.
+        case " $(snap_tags "$fsnap") " in
+            *" unit-$unit "*" kind-full "*|*" kind-full "*" unit-$unit "*|*" unit-$unit "*" kind-db "*|*" kind-db "*" unit-$unit "*) dsnap="$fsnap" ;;
+        esac
+    fi
     if [ "$do_dbs" -eq 1 ]; then
-        if [ -n "$dsnap" ]; then
+        if [[ "$dsnap" == hourly:* ]]; then
+            drow="$(hourly_row "${dsnap#hourly:}")" || die "no hourly DB snapshot ${dsnap#hourly:} on this server — see: points $unit db"
+        elif [ -n "$dsnap" ]; then
             drow="$(snap_row "$dsnap")"
         else
             # The dump paired with the file snapshot: the first one within DB_PAIR_WINDOW
@@ -744,12 +770,19 @@ cmd_restore_unit() {
             fi
         fi
         [ -n "$drow" ] || die "no db-dump snapshot found — use --db-snapshot or --files-only"
-        dsnap="${drow%%$'\t'*}"
+        [[ "$dsnap" == hourly:* ]] || dsnap="${drow%%$'\t'*}"
     fi
 
-    log "restore plan for $unit ($mode):"
+    log "restore plan for $unit ($mode) — by ${KBC_ACTOR:-${SUDO_USER:-$(id -un)}}:"
     [ "$do_files" -eq 1 ] && { log "  files from $fsnap ($ftime):"; for p in "${paths[@]}"; do log "    $p"; done; }
-    [ "$do_dbs" -eq 1 ] && log "  databases from db-dump ${drow/$'\t'/ (}): ${dbs[*]}"
+    if [ "$do_dbs" -eq 1 ]; then
+        if [[ "$dsnap" == hourly:* ]]; then
+            log "  databases from the hourly DB snapshot ${dsnap#hourly:} on this server (${drow#*$'\t'}): ${dbs[*]}"
+            pitr_space_check "${dsnap#hourly:}" || die "not enough free space for an hourly DB restore (see above)"
+        else
+            log "  databases from ${drow/$'\t'/ (}): ${dbs[*]}"
+        fi
+    fi
     if [ "$dry" -eq 0 ] && [ "$yes" -eq 0 ]; then
         log "nothing changed — add --dry-run to preview the changes, or --yes to restore"
         return 0
@@ -779,13 +812,21 @@ cmd_restore_unit() {
         build_id_map "$fsnap" "$wd" "$unit" "$own" "${paths[0]}"
     fi
 
-    if [ "$do_dbs" -eq 1 ]; then
+    if [ "$do_dbs" -eq 1 ] && [[ "$dsnap" == hourly:* ]]; then
+        if [ "$dry" -eq 1 ]; then
+            log "db: ${dbs[*]} would be rolled back to the hourly snapshot ${dsnap#hourly:} (prepared aside — the live server is untouched until the import)"
+        else
+            stage_hourly_dumps "$unit" "${dsnap#hourly:}" "$wd" "${dbs[@]}"
+        fi
+    elif [ "$do_dbs" -eq 1 ]; then
+        # Dumps live at DB_DUMP_DIR (scheduled) or CKPT_ROOT/<unit> (checkpoints, safety copies).
         local -a dinc=()
-        for db in "${dbs[@]}"; do dinc+=(--include "$DB_DUMP_DIR/$db.sql"); done
+        for db in "${dbs[@]}"; do dinc+=(--include "$DB_DUMP_DIR/$db.sql" --include "$CKPT_ROOT/$unit/$db.sql"); done
         retry_restic "staging DB dumps" restic_capped restore "$dsnap" --target "$wd/dbraw" "${dinc[@]}" \
             || restore_fail "$unit" "staging DB dumps from $dsnap failed after $RESTORE_ATTEMPTS attempts — check the repo connection (workdir kept: $wd)"
         for db in "${dbs[@]}"; do
-            if [ -s "$wd/dbraw$DB_DUMP_DIR/$db.sql" ]; then mv "$wd/dbraw$DB_DUMP_DIR/$db.sql" "$wd/dbs/"
+            if [ -s "$wd/dbraw$CKPT_ROOT/$unit/$db.sql" ]; then mv "$wd/dbraw$CKPT_ROOT/$unit/$db.sql" "$wd/dbs/"
+            elif [ -s "$wd/dbraw$DB_DUMP_DIR/$db.sql" ]; then mv "$wd/dbraw$DB_DUMP_DIR/$db.sql" "$wd/dbs/"
             else
                 log "WARN: no dump of $db in $dsnap (created after it?) — left as is"
                 later="$(restic_plain snapshots --compact --tag db-dump 2>/dev/null \
@@ -802,22 +843,25 @@ cmd_restore_unit() {
     if [ "$dry" -eq 0 ] && [ "$safety" -eq 1 ]; then
         local -a cur=()
         for p in "${paths[@]}"; do [ -e "$p" ] && cur+=("$p"); done
+        local kind=files
         if [ "$do_dbs" -eq 1 ]; then
-            install -d -m 0700 "$wd/safety-dbs"
-            for f in "$wd"/dbs/*.sql; do
-                [ -e "$f" ] || continue
-                db="$(basename "$f" .sql)"
-                db_capped "$MYSQLDUMP_BIN" --single-transaction --routines --triggers --events "$db" \
-                    > "$wd/safety-dbs/$db.sql" 2>/dev/null || rm -f "$wd/safety-dbs/$db.sql"
-            done
-            cur+=("$wd/safety-dbs")
+            # The databases being restored, dumped where checkpoints keep theirs — so the
+            # safety copy is itself a pickable restore point (files + DBs).
+            local -a sdbs=()
+            for f in "$wd"/dbs/*.sql; do [ -e "$f" ] && sdbs+=("$(basename "$f" .sql)"); done
+            if [ "${#sdbs[@]}" -gt 0 ]; then
+                dump_unit_dbs "$CKPT_ROOT/$unit" "${sdbs[@]}" || restore_fail "$unit" "safety dump of the current databases failed — nothing restored"
+                cur+=("$CKPT_ROOT/$unit")
+                if [ "$do_files" -eq 1 ]; then kind=full; else kind=db; fi
+            fi
         fi
         if [ "${#cur[@]}" -gt 0 ]; then
-            retry_restic "safety snapshot" restic_capped backup --tag pre-restore --tag "unit-$unit" --tag "$BACKUP_TAG" "${cur[@]}" \
+            retry_restic "safety snapshot" restic_capped backup --tag pre-restore --tag "unit-$unit" --tag "kind-$kind" \
+                --tag "label:pre-restore" --tag "$BACKUP_TAG" "${cur[@]}" \
                 || restore_fail "$unit" "safety snapshot failed — nothing restored (workdir kept: $wd)"
             log "safety snapshot of current state taken (tags pre-restore,unit-$unit)"
         fi
-        rm -rf "$wd/safety-dbs"
+        rm -rf "${CKPT_ROOT:?}/$unit"
     elif [ "$dry" -eq 0 ]; then
         log "no safety snapshot (--no-safety-snapshot) — this restore cannot be undone"
     fi
@@ -954,6 +998,207 @@ where it stopped." >/dev/null 2>&1
 }
 restore_ok() { rm -f "$RESTORE_STATE/$1.failed"; }
 
+# --- checkpoints, restore points, hourly per-account DB restore -------------------
+
+# Tags of one snapshot, space-separated.
+snap_tags() {
+    restic_plain snapshots --json "$1" 2>/dev/null \
+        | "$PYTHON_BIN" -c 'import json,sys
+d=json.load(sys.stdin) or [{}]
+print(" ".join(d[0].get("tags") or []))' 2>/dev/null
+}
+
+# Dump the given databases into <dir>/<db>.sql (fresh dir), each verified complete.
+dump_unit_dbs() {
+    local dir="$1" db; shift
+    rm -rf "${dir:?}"; install -d -m 0700 "$dir"
+    for db in "$@"; do
+        db_capped "$MYSQLDUMP_BIN" --single-transaction --routines --triggers --events "$db" \
+            > "$dir/$db.sql" || { log "mysqldump failed for $db"; return 1; }
+        tail -c 512 "$dir/$db.sql" | grep -q -- '-- Dump completed' || { log "dump of $db is incomplete"; return 1; }
+    done
+}
+
+# The unit's paths that are covered by BACKUP_PATHS (fills the caller's `paths` array).
+unit_paths() {
+    local ad="$1" unit="$2" p
+    paths=()
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        root_for_path "$p" >/dev/null && paths+=("$p")
+    done < <("$ad" paths-for-unit "$unit") || die "paths-for-unit $unit failed"
+}
+
+# checkpoint <unit> [--kind full|db|files] [--label TEXT] — an on-demand restore point for
+# one account (e.g. before a plugin update): its files and/or its databases, captured now,
+# tagged checkpoint + unit-<unit> + kind-<kind> + label:<text>, in the same repo.
+cmd_checkpoint() {
+    local unit="" kind=full label="" ad db out id
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --kind)  kind="${2:?--kind needs full|db|files}"; shift 2 ;;
+            --label) label="${2:?--label needs text}"; shift 2 ;;
+            -*)      die "checkpoint: unknown option $1" ;;
+            *)       [ -z "$unit" ] || die "checkpoint: one unit at a time"; unit="$1"; shift ;;
+        esac
+    done
+    [ -n "$unit" ] || die "usage: checkpoint <unit> [--kind full|db|files] [--label TEXT]"
+    case "$kind" in full|db|files) ;; *) die "--kind must be full, db or files" ;; esac
+    label="$(printf '%s' "${label:-manual}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-40)"
+    ad="$(adapter_bin)"
+    "$ad" list-units | cut -f1 | grep -qxF -- "$unit" || die "no unit '$unit' — see: list-units"
+    local -a paths=() dbs=() targets=()
+    if [ "$kind" != db ]; then
+        unit_paths "$ad" "$unit"
+        for p in "${paths[@]}"; do [ -e "$p" ] && targets+=("$p"); done
+    fi
+    if [ "$kind" != files ]; then
+        while IFS=$'\t' read -r _e db _o; do [ -n "$db" ] && dbs+=("$db"); done < <("$ad" dbs-for-unit "$unit")
+    fi
+    take_backup_lock 600 || die "another backup/restore is running — try again shortly"
+    if [ "${#dbs[@]}" -gt 0 ]; then
+        dump_unit_dbs "$CKPT_ROOT/$unit" "${dbs[@]}" || die "checkpoint: database dump failed — nothing saved"
+        targets+=("$CKPT_ROOT/$unit")
+    fi
+    [ "${#targets[@]}" -gt 0 ] || die "checkpoint: $unit has nothing to capture for kind $kind"
+    log "checkpoint $unit ($kind, label $label) — by ${KBC_ACTOR:-${SUDO_USER:-$(id -un)}}: ${targets[*]}"
+    out="$(retry_restic "checkpoint" restic_capped backup --tag checkpoint --tag "unit-$unit" --tag "kind-$kind" \
+        --tag "label:$label" --tag "$BACKUP_TAG" "${targets[@]}" && cat "$RESTORE_LOG")" \
+        || { rm -rf "${CKPT_ROOT:?}/$unit"; die "checkpoint of $unit failed"; }
+    rm -rf "${CKPT_ROOT:?}/$unit"
+    id="$(printf '%s\n' "$out" | sed -n 's/^snapshot \([0-9a-f]\{8\}\) saved.*/\1/p' | tail -1)"
+    log "checkpoint saved: ${id:-?} ($unit, $kind${dbs:+, databases: ${dbs[*]}}, label $label)"
+    log "restore it with: restore-unit $unit --snapshot ${id:-<id>}   (see: points $unit files|db)"
+}
+
+# "<YYYY-MM-DD HH:MM:SS>" when an on-server mariabackup point finished, from its info file.
+hourly_time() {
+    local d="$DB_STAGE/$1" t
+    t="$(sed -n 's/^end_time = //p' "$d/mariadb_backup_info" "$d/xtrabackup_info" 2>/dev/null | head -1)"
+    [ -n "$t" ] || t="$(date -r "$d" '+%F %T' 2>/dev/null)"
+    printf '%s\n' "$t"
+}
+# "hourly:<gen>/<point>\t<time>" for one point, or fail.
+hourly_row() {
+    [[ "$1" =~ ^gen-[ab]/(full|diff\.[0-9]+)$ ]] && [ -d "$DB_STAGE/$1" ] || return 1
+    printf 'hourly:%s\t%s\n' "$1" "$(hourly_time "$1")"
+}
+
+# points <unit> files|db — every restore point for one account, newest first, as TSV:
+#   id <TAB> "YYYY-MM-DD HH:MM" <TAB> source <TAB> label
+# files: scheduled backups that hold the unit + its checkpoints / safety copies (kind files|full)
+# db:    scheduled daily dumps + its checkpoints / safety copies (kind db|full) + the hourly
+#        snapshots of the on-server mariabackup chain (id hourly:<gen>/<point>).
+cmd_points() {
+    local unit="${1:-}" scope="${2:-}" hourly="${3:-}" ad gen d t
+    [ -n "$unit" ] && [[ "$scope" =~ ^(files|db)$ ]] || die "usage: points <unit> files|db [--hourly]"
+    ad="$(adapter_bin)"
+    "$ad" list-units | cut -f1 | grep -qxF -- "$unit" || die "no unit '$unit' — see: list-units"
+    local -a paths=(); unit_paths "$ad" "$unit"
+    {
+        restic_plain snapshots --json 2>/dev/null | "$PYTHON_BIN" -c '
+import json, sys
+scope, unit, upaths = sys.argv[1], sys.argv[2], sys.argv[3:]
+try: data = json.load(sys.stdin) or []
+except Exception: data = []
+for s in data:
+    tags = s.get("tags") or []; paths = s.get("paths") or []
+    sid = s.get("short_id") or s.get("id", "")[:8]; iso = s.get("time", "")
+    when = iso[:16].replace("T", " ")
+    kind = next((t[5:] for t in tags if t.startswith("kind-")), "")
+    label = next((t[6:] for t in tags if t.startswith("label:")), "")
+    units = [t for t in tags if t.startswith("unit-")]
+    mine = ("unit-" + unit) in tags
+    if units and not mine: continue
+    if mine:
+        if scope == "files" and kind not in ("files", "full") and not (kind == "" and "pre-restore" in tags): continue
+        if scope == "db" and kind not in ("db", "full"): continue
+        src = "safety copy (before a restore)" if "pre-restore" in tags else "checkpoint"
+    elif "db-dump" in tags:
+        if scope != "db": continue
+        src = "scheduled daily DB dump"
+    else:
+        if scope != "files": continue
+        if not any(u == p or u.startswith(p.rstrip("/") + "/") for u in upaths for p in paths): continue
+        src = "scheduled backup"
+    print("\t".join([iso, sid, when, src, label]))
+' "$scope" "$unit" "${paths[@]}"
+        # Hourly per-account DB restore from the on-server chain is CLI-only and experimental
+        # until it is tested on a box with the chain: listed only with --hourly.
+        if [ "$scope" = db ] && [ "$hourly" = --hourly ]; then
+            for gen in gen-a gen-b; do
+                for d in "$DB_STAGE/$gen"/full "$DB_STAGE/$gen"/diff.*; do
+                    [ -d "$d" ] || continue
+                    t="$(hourly_time "$gen/${d##*/}")"
+                    printf '%s\thourly:%s\t%s\thourly DB snapshot (on this server)\t\n' \
+                        "$(date -d "$t" '+%Y-%m-%dT%H:%M:%S%:z' 2>/dev/null || echo "$t")" "$gen/${d##*/}" "${t:0:16}"
+                done
+            done
+        fi
+    } | sort -r | cut -f2-
+}
+
+# Space for an hourly restore: the prepared copy of the whole instance (full + that diff).
+pitr_space_check() {
+    local pt="$1" gen="${1%%/*}" need avail
+    need="$(du -sb "$DB_STAGE/$gen/full" 2>/dev/null | cut -f1)"
+    [ "${pt#*/}" = full ] || need=$(( need + $(du -sb "$DB_STAGE/$pt" 2>/dev/null | cut -f1) ))
+    need=$(( need + need / 5 ))
+    avail="$(df -B1 --output=avail "$PITR_ROOT" 2>/dev/null | tail -1 | tr -d ' ')"
+    log "  hourly DB restore needs ~$(( need / 1048576 )) MiB scratch in $PITR_ROOT (free: $(( avail / 1048576 )) MiB)"
+    [ "$avail" -gt "$need" ]
+}
+
+# Restore-aside: prepare full (+ one differential) into scratch, start a throwaway MariaDB on
+# it (no network, no grants, own socket), dump just this unit's databases from it into
+# <wd>/dbs — then the normal path imports them. Other databases on the live server are never
+# touched. The scratch copy is removed on every exit path.
+stage_hourly_dumps() {
+    local unit="$1" pt="$2" wd="$3" gen="${2%%/*}" sc pid db n=0; shift 3
+    command -v "$MARIABACKUP_BIN" >/dev/null 2>&1 || restore_fail "$unit" "$MARIABACKUP_BIN not found — hourly DB restore needs it"
+    [ -x "$MARIADBD_BIN" ] || restore_fail "$unit" "no mariadbd/mysqld binary found (set MARIADBD_BIN)"
+    pitr_space_check "$pt" || restore_fail "$unit" "not enough free space in $PITR_ROOT for an hourly DB restore"
+    sc="$(mktemp -d "$PITR_ROOT/pitr.XXXXXX")" || restore_fail "$unit" "mktemp failed"
+    # shellcheck disable=SC2064
+    trap "pitr_cleanup '$sc'" RETURN
+    log "hourly DB restore: preparing $pt aside in $sc ..."
+    cp -a "$DB_STAGE/$gen/full" "$sc/data" || restore_fail "$unit" "copying the base backup failed"
+    db_capped "$MARIABACKUP_BIN" --prepare --target-dir="$sc/data" >"$sc/prepare.log" 2>&1 \
+        || restore_fail "$unit" "mariabackup --prepare (base) failed — see $sc/prepare.log"
+    if [ "${pt#*/}" != full ]; then
+        db_capped "$MARIABACKUP_BIN" --prepare --target-dir="$sc/data" --incremental-dir="$DB_STAGE/$pt" >>"$sc/prepare.log" 2>&1 \
+            || restore_fail "$unit" "mariabackup --prepare ($pt) failed"
+    fi
+    chown -R mysql:mysql "$sc"; chmod 0750 "$sc"
+    "$MARIADBD_BIN" --no-defaults --user=mysql --datadir="$sc/data" --socket="$sc/s.sock" \
+        --pid-file="$sc/m.pid" --skip-networking --skip-grant-tables --skip-log-bin \
+        --innodb-buffer-pool-size=128M --log-error="$sc/err.log" >/dev/null 2>&1 &
+    pid=$!
+    for _ in $(seq 60); do
+        "$MYSQLADMIN_BIN" -S "$sc/s.sock" ping >/dev/null 2>&1 && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+    done
+    "$MYSQLADMIN_BIN" -S "$sc/s.sock" ping >/dev/null 2>&1 \
+        || restore_fail "$unit" "the throwaway MariaDB did not start — see $sc/err.log"
+    for db in "$@"; do
+        if ! "$MYSQL_BIN" -S "$sc/s.sock" -N -B -e 'SHOW DATABASES' | grep -qxF -- "$db"; then
+            log "WARN: $db did not exist at $pt — left as is"; continue
+        fi
+        "$MYSQLDUMP_BIN" -S "$sc/s.sock" --single-transaction --routines --triggers --events "$db" \
+            > "$wd/dbs/$db.sql" || restore_fail "$unit" "dumping $db from the hourly snapshot failed"
+        n=$((n + 1))
+    done
+    log "hourly DB restore: $n database(s) extracted from $pt"
+}
+pitr_cleanup() {
+    local sc="$1"
+    "$MYSQLADMIN_BIN" -S "$sc/s.sock" shutdown >/dev/null 2>&1
+    for _ in $(seq 30); do [ -e "$sc/m.pid" ] || break; sleep 1; done
+    [ -e "$sc/m.pid" ] && kill "$(cat "$sc/m.pid")" 2>/dev/null
+    rm -rf "${sc:?}"
+}
+
 # Where one unit lives inside a `restic mount`: "<snapshot-id>\t<path>" per backed-up path
 # (the mount shows it at <mnt>/ids/<id><path>). Nothing is copied — files are read from the
 # repo on demand, so browsing needs no local space (console "Browse a backup").
@@ -1020,6 +1265,8 @@ main() {
         adapter-info)  cmd_adapter_info "$@" ;;
         restore-unit)  cmd_restore_unit "$@" ;;
         browse-unit)   cmd_browse_unit "$@" ;;
+        checkpoint)    cmd_checkpoint "$@" ;;
+        points)        cmd_points "$@" ;;
         mount)         cmd_mount "$@" ;;
         validate-excludes) cmd_validate_excludes "$@" ;;
         ""|-h|--help|help) usage 0 ;;

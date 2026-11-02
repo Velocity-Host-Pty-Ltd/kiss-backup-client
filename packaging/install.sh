@@ -37,7 +37,7 @@ RESTIC_DIR="${RESTIC_DIR:-/etc/restic}"
 UNITS="kiss-backup kiss-backup-check kiss-backup-prune kiss-backup-drill
        kiss-backup-db-full kiss-backup-db-diff kiss-backup-db-dump"
 # Console menus shipped standalone.
-MENUS="30-backups.menu 35-backup-stats.menu 40-account-restore.menu 45-browse-backup.menu"
+MENUS="30-backups.menu 35-backup-stats.menu 38-checkpoint.menu 40-account-restore.menu 45-browse-backup.menu"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }

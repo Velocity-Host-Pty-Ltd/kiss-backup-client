@@ -25,8 +25,13 @@ set -u
 
 ENGINE="${ENGINE:-/usr/local/lib/kiss-backup/restic_backup.sh}"
 TITLE="Restore an account"
-BROWSE=0
-[ "${1:-}" = --browse ] && { BROWSE=1; TITLE="Browse a backup"; }
+BROWSE=0; CKPT=0
+case "${1:-}" in
+    --browse)     BROWSE=1; TITLE="Browse a backup" ;;
+    --checkpoint) CKPT=1;   TITLE="Back up an account now" ;;
+esac
+# Who is at the keyboard — recorded in the job's log (audit: who restored / checkpointed).
+ACTOR="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
 
 # Same palette as console.sh, but only if unset — inherits the launcher's when run from
 # kiss-console, and is self-sufficient standalone (newt's default theme makes the
@@ -103,21 +108,69 @@ for u in "${units[@]}"; do
 done
 unit="$(ui --menu "Which account?" 20 72 12 "${menu[@]}")" || exit 0
 
-# 2. Snapshot — file snapshots and pre-restore safety snapshots, newest first.
-#    (DB dumps are matched to the chosen file snapshot by the engine.)
-mapfile -t snaps < <("$ENGINE" snapshots --compact 2>/dev/null \
-    | awk '/^[0-9a-f]{8} / && $5 != "db-dump" { print }' | tac | head -30)
-smenu=("latest" "Most recent backup (recommended)")
-for s in "${snaps[@]}"; do
-    read -r sid sdate stime _host stag _ <<<"$s"
-    label="$sdate $stime"
-    [ "$stag" = "pre-restore" ] && label="$label  (safety copy taken before a restore)"
-    smenu+=("$sid" "$label")
-done
-verb=Restore; [ "$BROWSE" -eq 1 ] && verb=Browse
-snap="$(ui --menu "$verb $unit from which backup?" 22 72 14 "${smenu[@]}")" || exit 0
+# Restore-point picker (headless: "a checkpoint is a checkpoint"): scheduled backups,
+# this account's checkpoints and safety copies, newest first, from `points <unit> files|db`.
+# Echoes the chosen id; $1 = files|db, $2 = prompt, $3 = optional extra first entry "tag|text".
+pick_point() {
+    local scope="$1" prompt="$2" extra="${3:-}" id when src label n=0
+    local -a pm=()
+    [ -n "$extra" ] && pm+=("${extra%%|*}" "${extra#*|}")
+    while IFS=$'\t' read -r id when src label; do
+        [ -n "$id" ] || continue
+        [[ "$id" == hourly:* ]] && continue          # hourly DB restore: CLI only for now
+        n=$((n + 1)); [ "$n" -gt 40 ] && break
+        [ -n "$label" ] && [ "$label" != pre-restore ] && src="$src: $label"
+        pm+=("$id" "$when  $src")
+    done < <("$ENGINE" points "$unit" "$scope" 2>/dev/null)
+    if [ "${#pm[@]}" -eq 0 ]; then msg "No $scope restore points for $unit yet." 8; return 1; fi
+    ui --menu "$prompt" 22 76 14 "${pm[@]}"
+}
+
+# Run the engine as its own systemd job (survives an SSH drop) and follow its log file.
+# run_job <job-name> <done-pattern> <engine args...>; returns 0 if the pattern appeared.
+run_job() {
+    local job="$1" done_re="$2"; shift 2
+    local logdir="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}" log last
+    log="$logdir/$unit.log"
+    install -d -m 0755 "$logdir"; : > "$log"
+    # stderr inherits stdout's handle; a second file: on the same path would overwrite it.
+    if ! systemd-run --quiet --collect --unit="$job" -p Type=exec -p StandardOutput="file:$log" \
+            -E KBC_ACTOR="$ACTOR" "$ENGINE" "$@" >"$out" 2>&1; then
+        show "could not start" "$out"; return 1
+    fi
+    running() { case "$(systemctl show -p ActiveState --value "$job" 2>/dev/null)" in active|activating|reloading|deactivating) return 0 ;; esac; return 1; }
+    sleep 1
+    while running; do
+        last="$(grep -v '^ *restic: ' "$log" 2>/dev/null | tail -1 | cut -c21-200)"
+        whiptail --title "$TITLE" --infobox "Working on $unit ...\n\n${last:-starting}\n\n(Safe to close this screen - the job keeps running.\n Its log: $log)" 12 76
+        sleep 3
+    done
+    cp "$log" "$out"
+    show "result" "$out"
+    grep -q "$done_re" "$out"
+}
+
+# --- Back up an account now: an on-demand checkpoint (headless "Backup" -> scope -> label) ---
+if [ "$CKPT" -eq 1 ]; then
+    kind="$(ui --menu "Back up $unit now - what?" 14 72 3 \
+        full  "Files and databases (same moment - best before risky changes)" \
+        db    "Databases only" \
+        files "Files only")" || exit 0
+    label="$(ui --inputbox "A label for this checkpoint (e.g. pre-plugin-update):" 10 72 "")" || exit 0
+    confirm "Save a checkpoint of $unit now?\n\n  what:  $kind\n  label: ${label:-manual}\n\nIt goes into the backup repository and shows up as a restore point." \
+        "Yes - back up $unit now" 14 || exit 0
+    if run_job "kiss-checkpoint-$unit" "checkpoint saved" checkpoint "$unit" --kind "$kind" --label "${label:-manual}"; then
+        msg "Checkpoint of $unit saved.\n\nIt is listed under Restore an account as 'checkpoint: ${label:-manual}'." 10
+    else msg "The checkpoint FAILED. The output above shows why." 9; fi
+    exit 0
+fi
+
+# --- Browse: pick a files restore point ---
 args=("$unit")
-[ "$snap" = latest ] || args+=(--snapshot "$snap")
+if [ "$BROWSE" -eq 1 ]; then
+    snap="$(pick_point files "Browse $unit from which restore point?" "latest|Most recent backup")" || exit 0
+    [ "$snap" = latest ] || args+=(--snapshot "$snap")
+fi
 
 # Browse: mount the repo read-only (nothing copied locally), then mc with the backup on
 # the left and the live account on the right. F5 reads just that file from the repo.
@@ -145,7 +198,7 @@ if [ "$BROWSE" -eq 1 ]; then
     exit 0
 fi
 
-# 3. What to restore.
+# 2. What to restore (headless: files / database / both).
 what="$(ui --menu "What should be restored for $unit?" 15 72 4 \
     both    "Files and databases" \
     files   "Files only (website, mail, settings)" \
@@ -160,6 +213,20 @@ case "$what" in
         [ -n "$path" ] || exit 0
         args+=(--files-only --only "$path") ;;
 esac
+
+# 3. Restore point(s): a files list, and for databases its own list.
+if [ "$what" != dbs ]; then
+    fsel="$(pick_point files "Restore $unit's files from which restore point?" "latest|Most recent backup")" || exit 0
+    [ "$fsel" = latest ] || args+=(--snapshot "$fsel")
+fi
+if [ "$what" = dbs ]; then
+    dsel="$(pick_point db "Restore $unit's databases from which restore point? (newest first)")" || exit 0
+    args+=(--db-snapshot "$dsel")
+elif [ "$what" = both ]; then
+    dsel="$(pick_point db "Restore $unit's databases from which restore point?" \
+        "match|The same moment as the files (checkpoint) or the nearest dump")" || exit 0
+    [ "$dsel" = match ] || args+=(--db-snapshot "$dsel")
+fi
 
 # 4. Merge or mirror — starts on the adapter's recommended mode (DirectAdmin: merge;
 #    velocity/headless: mirror, its exact-match restore). Always passed explicitly.
@@ -191,27 +258,9 @@ safety="$(ui --notags --default-item yes --menu \
 #    connection itself (3 attempts), then mails the owner.
 confirm "Restore $unit now, as previewed?$( [ "$safety" = no ] && printf '\n\nNO safety snapshot - this cannot be undone.')" \
     "Yes - restore $unit now" 14 || exit 0
-job="kiss-restore-$unit"
-logdir="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}"
-log="$logdir/$unit.log"
-install -d -m 0755 "$logdir"; : > "$log"
-# The job writes its whole output to $log (kept after it ends — also for the operator),
-# and this screen follows that file, so nothing depends on journal matching or timing.
-# (stderr inherits stdout's handle; a second file: on the same path would overwrite it.)
-if ! systemd-run --quiet --collect --unit="$job" -p Type=exec \
-        -p StandardOutput="file:$log" \
-        "$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1; then
-    show "could not start the restore" "$out"
-    exit 1
-fi
-running() { case "$(systemctl show -p ActiveState --value "$job" 2>/dev/null)" in active|activating|reloading|deactivating) return 0 ;; esac; return 1; }
-sleep 1
-while running; do
-    last="$(grep -v '^ *restic: ' "$log" 2>/dev/null | tail -1 | cut -c21-200)"
-    whiptail --title "$TITLE" --infobox "Restoring $unit ...\n\n${last:-starting}\n\n(Safe to close this screen - the restore keeps running.\n Its log: $log)" 12 76
-    sleep 3
-done
-cp "$log" "$out"
-show "result" "$out"
-if grep -q "restore of $unit done" "$out"; then msg "Restore of $unit finished." 8
-else msg "The restore FAILED. The output above shows where (also in $log).\n\nRun it again from this screen to resume - finished files are skipped." 12; fi
+# Second gate (headless): type the account name.
+typed="$(ui --inputbox "Final check - type the account name '$unit' to restore it:" 10 72 "")" || exit 0
+[ "$typed" = "$unit" ] || { msg "Name mismatch - nothing was changed." 8; exit 0; }
+if run_job "kiss-restore-$unit" "restore of $unit done" restore-unit "${args[@]}" --yes; then
+    msg "Restore of $unit finished." 8
+else msg "The restore FAILED. The output above shows where.\n\nRun it again from this screen to resume - finished files are skipped." 12; fi

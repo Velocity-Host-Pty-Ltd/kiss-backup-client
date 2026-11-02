@@ -1,0 +1,7 @@
+# vps-console descriptor — on-demand checkpoint of one account (files / databases / both,
+# labelled) before a risky change; shows up as a restore point (needs root).
+category="Backups"
+title="Back up an account now (checkpoint: files / databases / both)"
+command="/usr/local/lib/kiss-backup/restore_account.sh --checkpoint"
+needs_root=1
+order=38
