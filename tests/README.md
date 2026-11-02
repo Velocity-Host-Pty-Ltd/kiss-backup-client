@@ -69,6 +69,10 @@ through DirectAdmin's own API (`directadmin api-url`) — with a domain, a datab
 `--delete [user]` removes it again through DirectAdmin (home, mail, DNS and databases).
 Default: `kbuser` / `kbuser.test`.
 
+Cleanup: **`da-cleanup-test-data.sh [user] [--yes]`** lists, then removes, what these tests leave
+behind (the test account through DirectAdmin, the placeholder user, logs, restore status) and
+rebuilds DirectAdmin's user cache. Backups in the repository are kept.
+
 ### Per-account restore through the console (mirror)
 
 The account was damaged — `kbtest.txt` changed to `v2`, a `backdoor.php` planted, the database row
