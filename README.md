@@ -9,6 +9,8 @@ storage service by default, or to any restic SFTP repository you run yourself.
 - **Encrypted before it leaves the server** (AES-256). The storage end never sees your data.
 - **Restore one account, not the whole server** — pick an account and a point in time; files,
   mail, DNS and databases go back in place. A dry-run preview shows exactly what will change.
+- **Checkpoints before risky changes** — back up one account on demand (files, databases, or
+  both from the same moment) with a label like "pre-plugin-update"; it becomes a restore point.
 - **Browse a backup and fetch single files** — opens the backup read-only in Midnight Commander
   (`mc`), backup on the left, live server on the right. Nothing is copied to local disk.
 - **Proves its backups work** — a weekly restore drill and integrity check, plus a test round-trip
@@ -172,6 +174,7 @@ repository's size and deduplication. Under **Backups**:
 |---|---|
 | **What's backed up + schedule** | the paths, timers and retention in force |
 | **Refresh repo stats** | recomputes the size/dedup figures in the background |
+| **Back up an account now** | an on-demand checkpoint of one account — see below |
 | **Restore an account** | guided per-account restore — see below |
 | **Browse a backup** | open a backup read-only in `mc` to fetch single files — see below |
 
@@ -183,9 +186,12 @@ From the console (**Backups → Restore an account**) or the CLI
 (`kiss-backup restore-unit <account> …`). The console asks:
 
 1. **Which account** (from the panel adapter).
-2. **Which backup** — the most recent, or any earlier one, including the *safety snapshots*
-   taken before earlier restores.
-3. **What** — files and databases, files only, databases only, or one folder/file.
+2. **What** — files and databases, files only, databases only, or one folder/file.
+3. **Which restore point** — a list of the account's restore points, newest first: the
+   scheduled backups, its **checkpoints** (with their labels) and the **safety copies** taken
+   before earlier restores. Databases have **their own list** — the account's database
+   checkpoints and the daily database dumps. For *files and databases*, a full checkpoint
+   brings both back from the same moment; otherwise the nearest database dump is used.
 4. **How**
    - **Merge** — put back what the backup has; keep anything newer (DirectAdmin default).
    - **Exactly as it was** (mirror) — also **delete** files and tables created since the
@@ -197,7 +203,7 @@ From the console (**Backups → Restore an account**) or the CLI
    (today's mail, new orders) can still be fetched from it afterwards. It is uploaded and
    deduplicated, so it takes no local disk. Skipping it is your call; the restore then cannot
    be undone.
-7. **Confirm** — the restore runs as its own background job (`kiss-restore-<account>`), so a
+7. **Confirm** — twice: yes/no, then type the account name. The restore runs as its own background job (`kiss-restore-<account>`), so a
    dropped SSH session can't stop it halfway. The screen follows its progress; the full log
    is kept at `/var/lib/kiss-backups/restore-status/<account>.log`.
 
@@ -224,6 +230,17 @@ From the console (**Backups → Restore an account**) or the CLI
   fails, an alert email is sent and the console shows a warning. **Running the restore again
   resumes it**: files that were already restored are skipped.
 
+## Checkpoints — back up one account now
+
+**Backups → Back up an account now** (or `kiss-backup checkpoint <account>`): pick the account,
+then **files and databases** (captured at the same moment — the one to take before a plugin
+update or a migration), **databases only** or **files only**, and give it a label. The databases
+are dumped and checked complete, and the checkpoint goes into the repository like any backup.
+It then appears in the account's restore points as `checkpoint: <label>`.
+
+The safety copy taken before a restore is a restore point in the same way, so undoing a restore
+is just restoring that safety copy.
+
 ## Browsing a backup / fetching single files
 
 **Backups → Browse a backup**, pick an account and a backup. The repository is mounted
@@ -246,6 +263,10 @@ kiss-backup check [--read-data-subset=5%]   verify the repository
 kiss-backup restore-drill                prove a file + a database restore work
 
 kiss-backup list-units                   accounts the panel adapter knows
+kiss-backup checkpoint <account>         back up one account now (a labelled restore point)
+    --kind full|db|files                 files + databases (same moment) | databases | files
+    --label <text>                       e.g. pre-plugin-update
+kiss-backup points <account> files|db    the account's restore points, newest first
 kiss-backup restore-unit <account>       show the restore plan (changes nothing)
     --dry-run                            preview exactly what would change
     --yes                                do it
@@ -342,6 +363,12 @@ sudo packaging/install.sh --uninstall                              # remove code
 Uninstall keeps `/etc/kiss-backup`, the passphrase and, of course, the backups in the repository.
 
 ## Known limits
+
+- **Hourly database restore per account** (from the on-server MariaDB snapshots) is in the CLI as
+  an experimental feature (`points <account> db --hourly`, then
+  `restore-unit <account> --dbs-only --db-snapshot hourly:<gen>/<point>`); it is not yet tested
+  and not in the console. It needs free disk about the size of the whole MariaDB instance.
+- **Checkpoints follow the normal retention**; there is no separate cap yet.
 
 - **A restore needs the account to exist in the panel.** It puts files, mail, DNS and databases
   back into an existing account; it does not re-create the panel account itself (package, IP,

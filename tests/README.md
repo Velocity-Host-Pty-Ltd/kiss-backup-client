@@ -36,7 +36,10 @@ account `u1`, and drives `restore-unit` with a stub adapter.
 | an account path that is a whole backup root is refused | a broken adapter can't make "one account" mean `/home` |
 | a repository failure leaves the `<account>.failed` marker; a good restore clears it | failures are visible in the console |
 
-**Last result:** 10/10 PASS (2026-11-02).
+Also: a files checkpoint is saved, listed by `points` with its label (another account's is
+not), newest first, and restorable; a restore's safety copy is itself a restore point.
+
+**Last result:** 17/17 PASS (2026-11-02).
 
 ### `verify-restore-owner-remap.sh` — re-owning files when user/group IDs moved
 
@@ -103,6 +106,25 @@ A 300 MB file was backed up and deleted; while restoring it, restic was killed 8
   on local disk.
 
 **Result:** PASS (2026-11-01).
+
+### `da-checkpoint-test.sh` — checkpoints and restore points (the headless model)
+
+```bash
+bash tests/da-checkpoint-test.sh [user] [domain]
+```
+
+1. Database checkpoint → change the database → restore the database from that checkpoint.
+2. Full checkpoint (files + databases, same moment) → change both, plant a file → restore from
+   the checkpoint: the databases must come from **that checkpoint** (the test sets a value no
+   daily dump holds), the file back, the planted file gone.
+3. Restore-point lists: the database list has both checkpoints (with labels) and the daily
+   dumps; the files list has the full checkpoint but not the database-only one.
+4. Undo: the safety copy taken by step 2's restore is a database restore point; restoring it
+   brings the pre-restore value back.
+
+Found by this test and fixed: a full checkpoint's databases were taken from the daily dump.
+
+**Result:** ALL PASSED, 14 checks (2026-11-02).
 
 ### `da-uid-recreate-test.sh` — restore onto a re-created account with new IDs
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # KISS Backup standalone installer
-# Version: 0.1.0
+# Version: 0.2.0
 # Script Name: install.sh
 # Project: KISS-Backup-Client
 # Summary: Installs the Layer-1 engine, setup wizard, notifier, brand header and
