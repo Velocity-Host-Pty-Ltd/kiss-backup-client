@@ -192,17 +192,26 @@ safety="$(ui --notags --default-item yes --menu \
 confirm "Restore $unit now, as previewed?$( [ "$safety" = no ] && printf '\n\nNO safety snapshot - this cannot be undone.')" \
     "Yes - restore $unit now" 14 || exit 0
 job="kiss-restore-$unit"
-start="$(date +%s)"
-if ! systemd-run --quiet --collect --unit="$job" -p Type=exec "$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1; then
+logdir="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}"
+log="$logdir/$unit.log"
+install -d -m 0755 "$logdir"; : > "$log"
+# The job writes its whole output to $log (kept after it ends — also for the operator),
+# and this screen follows that file, so nothing depends on journal matching or timing.
+# (stderr inherits stdout's handle; a second file: on the same path would overwrite it.)
+if ! systemd-run --quiet --collect --unit="$job" -p Type=exec \
+        -p StandardOutput="file:$log" \
+        "$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1; then
     show "could not start the restore" "$out"
     exit 1
 fi
-while systemctl is-active --quiet "$job" 2>/dev/null; do
-    last="$(journalctl -q -u "$job" -t kiss-backup --since "@$start" -o cat -n 1 2>/dev/null | cut -c1-200)"
-    whiptail --title "$TITLE" --infobox "Restoring $unit ...\n\n${last:-starting}\n\n(Safe to close this screen - the restore keeps running.\n Follow it with: journalctl -fu $job)" 12 72
+running() { case "$(systemctl show -p ActiveState --value "$job" 2>/dev/null)" in active|activating|reloading|deactivating) return 0 ;; esac; return 1; }
+sleep 1
+while running; do
+    last="$(grep -v '^ *restic: ' "$log" 2>/dev/null | tail -1 | cut -c21-200)"
+    whiptail --title "$TITLE" --infobox "Restoring $unit ...\n\n${last:-starting}\n\n(Safe to close this screen - the restore keeps running.\n Its log: $log)" 12 76
     sleep 3
 done
-journalctl -q -u "$job" -t kiss-backup --since "@$start" -o cat >"$out" 2>/dev/null
+cp "$log" "$out"
 show "result" "$out"
 if grep -q "restore of $unit done" "$out"; then msg "Restore of $unit finished." 8
-else msg "The restore FAILED. The output above shows where.\n\nRun it again from this screen to resume - finished files are skipped." 11; fi
+else msg "The restore FAILED. The output above shows where (also in $log).\n\nRun it again from this screen to resume - finished files are skipped." 12; fi
