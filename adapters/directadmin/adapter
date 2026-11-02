@@ -76,11 +76,9 @@ v_detect() {
 }
 
 v_preflight() {
-    local t bad=0
+    local bad=0
     [ -d "$DA_USERS" ] || { err "no $DA_USERS — not a DirectAdmin box"; bad=1; }
-    for t in rsync "$MYSQL_BIN"; do
-        command -v "$t" >/dev/null 2>&1 || { err "missing tool: $t"; bad=1; }
-    done
+    command -v "$MYSQL_BIN" >/dev/null 2>&1 || { err "missing tool: $MYSQL_BIN"; bad=1; }
     "$MYSQL_BIN" -N -B -e 'SELECT 1' >/dev/null 2>&1 || { err "cannot reach MariaDB/MySQL as root"; bad=1; }
     [ "$bad" -eq 0 ] || exit 2
 }
@@ -96,14 +94,16 @@ v_list_units() {
 }
 
 v_paths_for_unit() {
-    local u="$1" dom p
+    local u="$1" dom
     valid_unit "$u"
     {
         printf '%s\n' "$HOME_ROOT/$u" "$DA_USERS/$u"
         while IFS= read -r dom; do
             printf '%s\n' "$VIRTUAL_DIR/$dom" "$NAMED_DIR/$dom.db"
         done < <(domains_of "$u")
-    } | while IFS= read -r p; do [ -e "$p" ] && printf '%s\n' "$p"; done
+    }
+    # Not filtered by what exists now: a deleted folder, mailbox or zone must still be
+    # restorable (a path the snapshot doesn't have simply restores nothing).
 }
 
 v_dbs_for_unit() {
@@ -124,17 +124,17 @@ v_restore_unit() {
     valid_unit "$u"
     md="$(rc_mode "$wd")" || exit $?          # a die in rc_mode must stop the restore
     read -r mode dry <<< "$md"
-    rc_restore_files "$u" "$wd" "$mode" "$dry"
+    rc_remap_owner "$u" "$wd" "$dry"           # files are already back (engine, restic)
     rc_restore_dbs "$u" "$wd" "$mode" "$dry"      # DA databases are <user>_*
 
     [ "$dry" = 1 ] && return 0
     # Let DA rebuild what it generates from the account config, and reload DNS if a
     # zone came back. Both best-effort: the data is already in place.
-    if [ -d "$wd/files$DA_USERS/$u" ]; then
+    if grep -qxF "$DA_USERS/$u" "$wd/paths" 2>/dev/null; then
         echo "action=rewrite&value=httpd" >> "$DA_DIR/data/task.queue" 2>/dev/null \
             && err "queued DA httpd rewrite" || err "could not queue DA httpd rewrite (do it from DA)"
     fi
-    if compgen -G "$wd/files$NAMED_DIR/*.db" >/dev/null; then
+    if grep -q "^$NAMED_DIR/" "$wd/paths" 2>/dev/null; then
         { rndc reload >/dev/null 2>&1 || systemctl reload named >/dev/null 2>&1; } \
             && err "reloaded DNS" || err "could not reload named — reload it by hand"
     fi

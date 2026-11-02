@@ -3,8 +3,8 @@
 # verify-restore-owner-remap.sh
 # -----------------------------
 # Unit check for adapters/lib/restore_common.sh rc_remap_owner: when the account's
-# current uid:gid differs from the backup-time owner of its staged files, only the
-# files that carried the OLD ids are handed over (others — mail:mail, root — keep theirs),
+# current uid:gid differs from its backup-time owner (KBC_BACKUP_OWNER, from the engine),
+# only the restored files that carry the OLD ids are handed over (others — mail:mail, root — keep theirs),
 # a dry run reports and changes nothing, and a same-owner or root case is a no-op.
 #
 # Runs unprivileged: chown/chgrp are replaced by logging stubs on PATH, and the "current"
@@ -30,18 +30,18 @@ done
 ME="$(id -u):$(id -g)"
 run() {   # run <current-owner> <dry>
     : > "$T/log"
-    PATH="$T/bin:$PATH" CUR="$1" DRY="$2" WD="$T/wd" bash -c '
+    PATH="$T/bin:$PATH" CUR="$1" DRY="$2" WD="$T/wd" LIVE="$T/live" KBC_BACKUP_OWNER="$ME" bash -c '
         err() { printf "%s\n" "$*" >&2; }
         die() { shift; err "$*"; exit 3; }
-        allowed_roots() { printf "%s\n" /home/u1; }
+        allowed_roots() { printf "%s\n" "$LIVE/home/u1"; }
         v_owner_for_unit() { printf "%s\n" "$CUR"; }
         . "'"$HERE"'/../adapters/lib/restore_common.sh"
         rc_remap_owner u1 "$WD" "$DRY"' 2> "$T/err"
 }
 
-mkdir -p "$T/wd/files/home/u1/sub"
-touch "$T/wd/files/home/u1/a" "$T/wd/files/home/u1/sub/b"
-printf '/home/u1\n/etc/elsewhere\n' > "$T/wd/paths"
+mkdir -p "$T/wd" "$T/live/home/u1/sub" "$T/live/etc/elsewhere"
+touch "$T/live/home/u1/a" "$T/live/home/u1/sub/b" "$T/live/etc/elsewhere/x"
+printf '%s\n' "$T/live/home/u1" "$T/live/etc/elsewhere" > "$T/wd/paths"
 
 run "$ME" 0
 [ ! -s "$T/log" ] && ok "same owner → no chown" || bad "same owner chowned: $(cat "$T/log")"

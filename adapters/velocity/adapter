@@ -67,11 +67,9 @@ v_detect() {
 }
 
 v_preflight() {
-    local t bad=0
+    local bad=0
     [ -d "$TENANT_DIR" ] || { err "no tenant ledger at $TENANT_DIR"; bad=1; }
-    for t in rsync "$MYSQL_BIN"; do
-        command -v "$t" >/dev/null 2>&1 || { err "missing tool: $t"; bad=1; }
-    done
+    command -v "$MYSQL_BIN" >/dev/null 2>&1 || { err "missing tool: $MYSQL_BIN"; bad=1; }
     "$MYSQL_BIN" -N -B -e 'SELECT 1' >/dev/null 2>&1 || { err "cannot reach MariaDB/MySQL as root"; bad=1; }
     [ "$bad" -eq 0 ] || exit 2
 }
@@ -121,7 +119,7 @@ v_restore_unit() {
     read -r mode dry <<< "$md"
     p="$(prefix_of "$u")"
     [[ "$p" =~ ^[A-Za-z0-9]+$ ]] || die 1 "unsafe db_prefix '$p' in $u's record"
-    rc_restore_files "$u" "$wd" "$mode" "$dry"
+    rc_remap_owner "$u" "$wd" "$dry"           # files are already back (engine, restic)
     rc_restore_dbs "$p" "$wd" "$mode" "$dry"
 }
 

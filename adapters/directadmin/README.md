@@ -9,8 +9,8 @@ adapter lets the engine restore **one account** from any hourly snapshot.
 | `list-units` | every `data/users/<user>/user.conf` → `user`, `user (main domain)`, `usertype` |
 | `paths-for-unit` | `/home/<user>` · `/usr/local/directadmin/data/users/<user>` · per domain `/etc/virtual/<domain>` (mail accounts) and `/var/named/<domain>.db` (DNS) — existing ones only |
 | `dbs-for-unit` | databases named `<user>_*` (DA's prefix rule) |
-| `restore-unit` | rsync each staged path back (`merge`, or `--delete` for `mirror`); import each `<user>_*` dump (mirror drops + recreates the DB first, keeping grants); queues a DA `httpd` rewrite if the account config came back and reloads DNS if a zone did |
-| `preflight` | DA tree, `rsync`, MariaDB reachable as root |
+| `restore-unit` | after the engine has restored the files in place (restic): hand files to a re-created account's new uid/gid if they differ; import each `<user>_*` dump (mirror drops + recreates the DB first, keeping grants); queues a DA `httpd` rewrite if the account config came back and reloads DNS if a zone did |
+| `preflight` | DA tree, MariaDB reachable as root |
 | `owner-for-unit` | the account's `uid:gid` |
 
 ## Using it

@@ -177,11 +177,32 @@ rc=$?
 show "preview (nothing changed yet)" "$out"
 [ "$rc" -eq 0 ] || { msg "The preview failed — nothing was changed.\nThe output above shows why." 9; exit 1; }
 
-# 6. Confirm + restore.
-confirm "Restore $unit now, as previewed?\n\nA safety copy of the account's current state is taken first, so this can be undone (pick that safety copy as the backup to restore)." \
-    "Yes — restore $unit now" 15 || exit 0
-"$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1
-rc=$?
+# 6. Safety snapshot (optional, recommended): the account's current state goes into the
+#    repo first, so the restore can be undone and anything newer than the backup (today's
+#    mail, orders) can still be fetched from it. Skipping it is the deliberate choice.
+safety="$(ui --notags --default-item yes --menu \
+    "Take a safety snapshot of $unit's CURRENT state before restoring?\n\nIt lets you undo this restore, or fetch anything newer than the backup (today's mail, orders) afterwards. It is uploaded to the backup repo - no local disk." 16 72 2 \
+    yes "Yes - take a safety snapshot first (recommended)" \
+    no  "No - restore without one (cannot be undone)")" || exit 0
+[ "$safety" = no ] && args+=(--no-safety-snapshot)
+
+# 7. Confirm + restore. Runs as its own systemd job, so a dropped SSH session can't stop
+#    it halfway; this screen just follows its progress. restic retries a dropped repo
+#    connection itself (3 attempts), then mails the owner.
+confirm "Restore $unit now, as previewed?$( [ "$safety" = no ] && printf '\n\nNO safety snapshot - this cannot be undone.')" \
+    "Yes - restore $unit now" 14 || exit 0
+job="kiss-restore-$unit"
+start="$(date +%s)"
+if ! systemd-run --quiet --collect --unit="$job" -p Type=exec "$ENGINE" restore-unit "${args[@]}" --yes >"$out" 2>&1; then
+    show "could not start the restore" "$out"
+    exit 1
+fi
+while systemctl is-active --quiet "$job" 2>/dev/null; do
+    last="$(journalctl -q -u "$job" -t kiss-backup --since "@$start" -o cat -n 1 2>/dev/null | cut -c1-200)"
+    whiptail --title "$TITLE" --infobox "Restoring $unit ...\n\n${last:-starting}\n\n(Safe to close this screen - the restore keeps running.\n Follow it with: journalctl -fu $job)" 12 72
+    sleep 3
+done
+journalctl -q -u "$job" -t kiss-backup --since "@$start" -o cat >"$out" 2>/dev/null
 show "result" "$out"
-if [ "$rc" -eq 0 ]; then msg "Restore of $unit finished." 8
-else msg "The restore FAILED (exit $rc). The output above shows where; a kept workdir is named in it." 10; fi
+if grep -q "restore of $unit done" "$out"; then msg "Restore of $unit finished." 8
+else msg "The restore FAILED. The output above shows where.\n\nRun it again from this screen to resume - finished files are skipped." 11; fi

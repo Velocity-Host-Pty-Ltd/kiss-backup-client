@@ -35,6 +35,9 @@
 #                              --dry-run (preview) or --yes (do it). Options:
 #       --snapshot ID  --db-snapshot ID  --only PATH
 #       --files-only | --dbs-only        --merge | --mirror
+#       --no-safety-snapshot   skip the pre-restore snapshot (can't be undone)
+#                              Files go straight back in place (no local copy); a
+#                              dropped repo link is retried 3x, then the owner is mailed.
 #   browse-unit <account> [--snapshot ID]
 #                              print "<snapshot-id> <path>" per account path — where to
 #                              look under a `kiss-backup mount` (console: Browse a backup)
@@ -132,6 +135,10 @@ DRILL_CURSOR="$DRILL_SCRATCH/.cursor"
 ADAPTER="${ADAPTER:-}"
 ADAPTER_DIR="${KBC_ADAPTER_DIR:-/usr/local/lib/kiss-backup/adapters}"
 RESTORE_ROOT="${BACKUP_RESTORE_ROOT:-/var/lib/kiss-backups/restore}"
+RESTORE_STATE="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}"   # <unit>.failed
+RESTORE_ATTEMPTS="${BACKUP_RESTORE_ATTEMPTS:-3}"
+RESTORE_LOG="${RESTORE_ROOT}/.restic-last.log"
+NOTIFY_BIN="${NOTIFY_BIN:-$(dirname "$(readlink -f "$0")")/notify.sh}"
 # A DB dump taken up to this many seconds AFTER a file snapshot is its pair (the backup and
 # db-dump services run back to back); outside it, restore-unit uses the newest dump before.
 DB_PAIR_WINDOW="${BACKUP_DB_PAIR_WINDOW:-900}"
@@ -641,7 +648,7 @@ snap_row() {
 }
 
 cmd_restore_unit() {
-    local unit="" fsnap="" dsnap="" only="" do_files=1 do_dbs=1 mode="" dry=0 yes=0
+    local unit="" fsnap="" dsnap="" only="" do_files=1 do_dbs=1 mode="" dry=0 yes=0 safety=1
     while [ $# -gt 0 ]; do
         case "$1" in
             --snapshot)    fsnap="${2:?--snapshot needs an id}"; shift 2 ;;
@@ -653,11 +660,12 @@ cmd_restore_unit() {
             --merge)       mode=merge; shift ;;
             --dry-run)     dry=1; shift ;;
             --yes)         yes=1; shift ;;
+            --no-safety-snapshot) safety=0; shift ;;
             -*)            die "restore-unit: unknown option $1" ;;
             *)             [ -z "$unit" ] || die "restore-unit: one unit at a time"; unit="$1"; shift ;;
         esac
     done
-    [ -n "$unit" ] || die "usage: restore-unit <unit> [--snapshot ID] [--only PATH] [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes]"
+    [ -n "$unit" ] || die "usage: restore-unit <unit> [--snapshot ID] [--only PATH] [--files-only|--dbs-only] [--mirror] [--dry-run] [--yes] [--no-safety-snapshot]"
     local ad; ad="$(adapter_bin)"
     if "$ad" info | grep -q '"preflight"'; then "$ad" preflight || die "adapter preflight failed"; fi
     # No --merge/--mirror: the adapter's default (velocity = mirror, headless' exact match).
@@ -681,7 +689,13 @@ cmd_restore_unit() {
         fi
         local -a covered=()
         for p in "${paths[@]}"; do
-            if r="$(root_for_path "$p")"; then covered+=("$p"); root="${root:-$r}"
+            case "$p/" in /*) ;; *) die "non-absolute path from the adapter: $p" ;; esac
+            case "$p/" in */../*|*/./*|*//*) die "unsafe path from the adapter: $p" ;; esac
+            if r="$(root_for_path "$p")"; then
+                # A unit path must sit strictly inside a backup root: never a root itself
+                # (restoring "/home" with --delete would rewrite every account).
+                [ "$p" != "$r" ] || die "adapter path $p is a whole backup root — refusing"
+                covered+=("$p"); root="${root:-$r}"
             else log "WARN: $p is not under any BACKUP_PATHS root — not in the backups, skipped"; fi
         done
         paths=("${covered[@]}")
@@ -742,23 +756,35 @@ cmd_restore_unit() {
     fi
 
     take_backup_lock 600 || die "another backup/restore is running — try again shortly"
+
+    # Owner check before any write: the account must have a system user + group now
+    # (/etc/passwd, /etc/group). Files come back with their backup-time numeric ids; if
+    # the account was re-created (or this is a rebuilt server) those differ, and the
+    # adapter hands the restored files over afterwards.
+    local own="" bown=""
+    if [ "$do_files" -eq 1 ]; then
+        own="$("$ad" owner-for-unit "$unit" 2>/dev/null)" && [[ "$own" =~ ^[0-9]+:[0-9]+$ ]] \
+            || restore_fail "$unit" "$unit has no system user in /etc/passwd — re-create the account in the control panel first, then restore"
+        getent group "${own#*:}" >/dev/null \
+            || restore_fail "$unit" "group ${own#*:} of $unit is not in /etc/group — fix the account first"
+        bown="$(snap_owner "$fsnap" "${paths[0]}")"
+        if [ -z "$bown" ]; then log "  owner: could not read ${paths[0]}'s owner in $fsnap — no remap"
+        elif [ "$bown" = "$own" ]; then log "  owner: $own (same as in the backup)"
+        else log "  owner: backup $bown, live $own — restored files will be handed to $own"; fi
+    fi
+
+    # The workdir now only carries the DB dumps + the list of restored paths (files go
+    # straight back in place — no local copy of the account).
     install -d -m 0700 "$RESTORE_ROOT"
     local wd; wd="$(mktemp -d "$RESTORE_ROOT/$unit.XXXXXX")" || die "mktemp failed"
-    install -d -m 0700 "$wd/files" "$wd/dbs"
+    install -d -m 0700 "$wd/dbs"
+    [ "$do_files" -eq 1 ] && printf '%s\n' "${paths[@]}" > "$wd/paths"
 
-    # Stage from the snapshots.
-    if [ "$do_files" -eq 1 ]; then
-        local -a inc=()
-        for p in "${paths[@]}"; do inc+=(--include "$p"); done
-        restic_capped restore "$fsnap" --target "$wd/files" "${inc[@]}" >/dev/null \
-            || die "staging files from $fsnap failed (workdir kept: $wd)"
-        printf '%s\n' "${paths[@]}" > "$wd/paths"
-    fi
     if [ "$do_dbs" -eq 1 ]; then
         local -a dinc=()
         for db in "${dbs[@]}"; do dinc+=(--include "$DB_DUMP_DIR/$db.sql"); done
-        restic_capped restore "$dsnap" --target "$wd/dbraw" "${dinc[@]}" >/dev/null \
-            || die "staging DB dumps from $dsnap failed (workdir kept: $wd)"
+        retry_restic "staging DB dumps" restic_capped restore "$dsnap" --target "$wd/dbraw" "${dinc[@]}" \
+            || restore_fail "$unit" "staging DB dumps from $dsnap failed after $RESTORE_ATTEMPTS attempts — check the repo connection (workdir kept: $wd)"
         for db in "${dbs[@]}"; do
             if [ -s "$wd/dbraw$DB_DUMP_DIR/$db.sql" ]; then mv "$wd/dbraw$DB_DUMP_DIR/$db.sql" "$wd/dbs/"
             else
@@ -771,9 +797,10 @@ cmd_restore_unit() {
         rm -rf "$wd/dbraw"
     fi
 
-    # Safety net: snapshot the unit's CURRENT state first, so the restore can be undone
-    # by restoring the pre-restore snapshot. Skipped for a dry run (nothing changes).
-    if [ "$dry" -eq 0 ]; then
+    # Safety net (optional, default on): snapshot the unit's CURRENT state into the repo
+    # first, so the restore can be undone — and anything newer than the backup (today's
+    # mail, orders) can still be fetched from it. Uploaded, deduplicated: no local copy.
+    if [ "$dry" -eq 0 ] && [ "$safety" -eq 1 ]; then
         local -a cur=()
         for p in "${paths[@]}"; do [ -e "$p" ] && cur+=("$p"); done
         if [ "$do_dbs" -eq 1 ]; then
@@ -787,18 +814,114 @@ cmd_restore_unit() {
             cur+=("$wd/safety-dbs")
         fi
         if [ "${#cur[@]}" -gt 0 ]; then
-            restic_capped backup --tag pre-restore --tag "unit-$unit" --tag "$BACKUP_TAG" "${cur[@]}" >/dev/null \
-                || die "pre-restore safety snapshot failed — nothing restored (workdir kept: $wd)"
+            retry_restic "safety snapshot" restic_capped backup --tag pre-restore --tag "unit-$unit" --tag "$BACKUP_TAG" "${cur[@]}" \
+                || restore_fail "$unit" "safety snapshot failed — nothing restored (workdir kept: $wd)"
             log "safety snapshot of current state taken (tags pre-restore,unit-$unit)"
         fi
+        rm -rf "$wd/safety-dbs"
+    elif [ "$dry" -eq 0 ]; then
+        log "no safety snapshot (--no-safety-snapshot) — this restore cannot be undone"
+    fi
+
+    # Files, in place: restic writes only what differs from the snapshot (merge), and with
+    # --delete also removes what the snapshot doesn't have (mirror). An interrupted run is
+    # resumed by running it again — finished files are skipped.
+    if [ "$do_files" -eq 1 ]; then
+        restore_files_inplace "$unit" "$fsnap" "$mode" "$dry" "$wd" "${paths[@]}"
     fi
 
     KBC_SNAPSHOT="$fsnap" KBC_WORKDIR="$wd" KBC_DRY_RUN="$dry" KBC_RESTORE_MODE="$mode" \
-        "$ad" restore-unit "$unit" "$wd" || die "adapter restore-unit failed (workdir kept: $wd)"
+        KBC_BACKUP_OWNER="$bown" \
+        "$ad" restore-unit "$unit" "$wd" || restore_fail "$unit" "adapter restore-unit failed (workdir kept: $wd)"
     rm -rf "$wd"
     if [ "$dry" -eq 1 ]; then log "dry run done — nothing changed"
-    else log "restore of $unit done (undo: restore the pre-restore,unit-$unit snapshot)"; fi
+    else
+        restore_ok "$unit"
+        if [ "$safety" -eq 1 ]; then log "restore of $unit done (undo: restore the pre-restore,unit-$unit snapshot)"
+        else log "restore of $unit done"; fi
+    fi
 }
+
+# The numeric "uid:gid" of <path> as recorded in <snapshot>, or nothing.
+snap_owner() {
+    restic_plain ls --json "$1" "$2" 2>/dev/null \
+        | grep -F "\"path\":\"$2\"" | head -1 \
+        | sed -n 's/.*"uid":\([0-9]*\).*"gid":\([0-9]*\).*/\1:\2/p'
+}
+
+# Run a restic step up to RESTORE_ATTEMPTS times (30 s, 60 s, ... between) — a dropped
+# SFTP link mid-restore shouldn't need a person. Restic's restore resumes on a re-run.
+retry_restic() {
+    local what="$1" n=1; shift
+    while :; do
+        "$@" >"$RESTORE_LOG" 2>&1 && return 0
+        tail -5 "$RESTORE_LOG" | sed 's/^/    restic: /' | while IFS= read -r l; do log "$l"; done
+        [ "$n" -ge "$RESTORE_ATTEMPTS" ] && return 1
+        log "WARN: $what failed (attempt $n/$RESTORE_ATTEMPTS) — retrying in $((30 * n)) s"
+        sleep $((30 * n)); n=$((n + 1))
+    done
+}
+
+# Restore the unit's paths in place. Before a real write, the same restore runs as a dry
+# run and every path it would touch must be inside the unit's paths (or a parent dir of
+# one, whose metadata restic restores): the guard in front of restic that keeps a
+# --target / restore, and above all --delete, inside the account.
+restore_files_inplace() {
+    local unit="$1" snap="$2" mode="$3" dry="$4" wd="$5"; shift 5
+    local -a paths=("$@") args=(restore "$snap" --target / --overwrite if-changed)
+    local p f bad
+    for p in "${paths[@]}"; do args+=(--include "$p"); done
+    [ "$mode" = mirror ] && args+=(--delete)
+
+    retry_restic "restore preview" restic_capped "${args[@]}" --dry-run -vv \
+        || restore_fail "$unit" "restore preview failed after $RESTORE_ATTEMPTS attempts — check the repo connection; nothing changed"
+    # Every absolute path restic mentions — except its header line, which lists all the
+    # snapshot's roots ("restoring snapshot … of [/home /etc …] … to /").
+    bad="$(grep -v '^restoring snapshot' "$RESTORE_LOG" | grep -oE '(^| )/[^ ]*' | sed 's/^ //' | sort -u | while IFS= read -r f; do
+        ok=0
+        for p in "${paths[@]}"; do
+            { [ "$f" = "$p" ] || [[ "$f" == "$p"/* ]] || [[ "$p" == "$f"/* ]] || [ "$f" = / ]; } && { ok=1; break; }
+        done
+        [ "$ok" -eq 1 ] || printf '%s\n' "$f"
+    done)"
+    [ -z "$bad" ] || restore_fail "$unit" "restore would touch paths outside $unit — refusing: $(printf '%s ' $bad | cut -c1-300)"
+    cp "$RESTORE_LOG" "$wd/files-plan.log"
+
+    if [ "$dry" -eq 1 ]; then
+        log "files ($mode) — what would change:"
+        # Parent dirs of the unit's paths (/, /home) only get their metadata reset — not news.
+        grep -E '^(restored|updated|deleted) |^Summary' "$wd/files-plan.log" | while IFS= read -r l; do
+            f="$(printf '%s' "$l" | awk '{print $2}')"
+            for p in "${paths[@]}"; do [[ "$p" == "$f"/* ]] || [ "$f" = / ] && continue 2; done
+            printf '%s\n' "$l"
+        done | head -200 | while IFS= read -r l; do log "  $l"; done
+        log "  ($(grep -c '^unchanged ' "$wd/files-plan.log") files already match the backup)"
+        return 0
+    fi
+    log "restoring files in place ($mode) from $snap ..."
+    retry_restic "file restore" restic_capped "${args[@]}" \
+        || restore_fail "$unit" "file restore failed after $RESTORE_ATTEMPTS attempts — check the repo connection. Re-running the restore resumes it (finished files are skipped)."
+    grep -i 'summary' "$RESTORE_LOG" | while IFS= read -r l; do log "  $l"; done
+    log "files: restored in place ($mode)"
+}
+
+# Restore outcome, kept for the console (shows a warning on open) and the owner's mail.
+restore_fail() {
+    local unit="$1" why="$2"
+    install -d -m 0755 "$RESTORE_STATE"
+    printf '%s\t%s\n' "$(date '+%F %T')" "$why" > "$RESTORE_STATE/$unit.failed"
+    [ -x "$NOTIFY_BIN" ] && "$NOTIFY_BIN" --event ops-alert \
+        --subject "KISS Backup: restore of $unit FAILED on $(hostname -f 2>/dev/null || hostname)" \
+        --body "The restore of account $unit failed at $(date '+%F %T'):
+
+  $why
+
+Nothing more will be retried automatically. Check the connection to the backup repo
+(kiss-backup snapshots), then run the restore again from kiss-console — it resumes
+where it stopped." >/dev/null 2>&1
+    die "$why"
+}
+restore_ok() { rm -f "$RESTORE_STATE/$1.failed"; }
 
 # Where one unit lives inside a `restic mount`: "<snapshot-id>\t<path>" per backed-up path
 # (the mount shows it at <mnt>/ids/<id><path>). Nothing is copied — files are read from the

@@ -30,6 +30,7 @@ CONSOLE_D="${KBC_CONSOLE_D:-$KBC_CONFIG_DIR/console.d}"
 BRAND="Velocity Host — Operator Console"
 TENANT_DIR="${TENANT_DIR:-/var/log/tenant-management}"
 STATS_CACHE="${BACKUP_STATS_CACHE:-/var/lib/kiss-backups/repo-stats}"
+RESTORE_STATE="${BACKUP_RESTORE_STATE:-/var/lib/kiss-backups/restore-status}"
 
 # BUTTONS: whiptail draws <Ok>/<Cancel> as newt COMPACT buttons — the FOCUSED one uses
 # `button`, the UNFOCUSED ones use `compactbutton`; `actbutton` is never used. Left unset,
@@ -137,6 +138,11 @@ read_desc() {
 }
 
 gather_status
+# A restore that failed for good (after its retries) leaves <unit>.failed — say so up front.
+failed="$(for f in "$RESTORE_STATE"/*.failed; do [ -e "$f" ] || continue
+    printf '%s: %s\n\n' "$(basename "$f" .failed)" "$(cut -f1,2 --output-delimiter=' - ' "$f" | cut -c1-300)"; done)"
+[ -n "$failed" ] && whiptail --title "$BRAND - RESTORE FAILED" --scrolltext --msgbox \
+    "A restore did not finish:\n\n${failed}Check the connection to the backup repo, then run the restore again from Backups -> Restore an account (it resumes where it stopped)." 20 76
 while :; do
     mapfile -t rows < <(
         shopt -s nullglob

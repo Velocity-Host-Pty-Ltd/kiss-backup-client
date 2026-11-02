@@ -10,7 +10,7 @@ coupling from vps-baseline lives here, behind the adapter contract (`docs/archit
 | `paths-for-unit` | the record's **`docroot`** (default `/home/<account>/public_html`), only if it exists — the same scope as vps-baseline's own `backup_ondemand` |
 | `dbs-for-unit` | databases `<db_prefix>_*` (`db_prefix` == account by design) |
 | `restore-unit` | shared `adapters/lib/restore_common.sh`: sync the docroot back, import complete dumps only |
-| `preflight` · `owner-for-unit` | ledger present, `rsync`, MariaDB as root · the account's `uid:gid` |
+| `preflight` · `owner-for-unit` | ledger present, MariaDB as root · the account's `uid:gid` |
 
 **Default restore mode is `mirror`** (`"default_restore_mode":"mirror"` in `info`), matching
 headless' exact-match restore: files added since the snapshot — e.g. an injected backdoor — are
