@@ -137,7 +137,11 @@ bash tests/da-mail-restore-test.sh [user] [domain]
 4. Checks: message A back and owned `user:mail`; IMAP login works; a new message B is delivered
    after the restore and IMAP sees it.
 
-**Result:** _not yet run_.
+Found on the way: DirectAdmin refuses an unlimited send limit for a new mailbox, so the test
+uses a daily limit of 100.
+
+**Result:** ALL PASSED, 8 checks (2026-11-01). CageFS is not installed on the test server, so the
+CageFS check was skipped — not yet tested.
 
 ---
 
