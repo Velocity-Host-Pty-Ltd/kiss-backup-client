@@ -7,11 +7,13 @@
 #   end to end and prints PASS/FAIL — no copy-pasting. Picks up from wherever it is:
 #     1. finds the newest backup that still has <user> in its /etc/passwd (+ the old ids);
 #     2. deletes <user> in DA if it still exists;
-#     3. creates a placeholder user that takes the old uid (and gid) if they're free;
-#     4. re-creates <user> (tests/da-make-test-user.sh) — waits out DA's account limit
-#        while a delete is still in its task queue;
-#     5. dry run, then a real mirror restore from that backup (CLI, --yes);
-#     6. checks: no file left on an old id, marker file + DB back (both changed after the
+#     3. removes the placeholder for now — this DA build counts Unix users against the
+#        license, so it would block the re-create;
+#     4. re-creates <user> (tests/da-make-test-user.sh);
+#     5. moves <user> to new ids (usermod/groupmod — as on a rebuilt server) and puts a
+#        placeholder user on the old ids, so they belong to someone else;
+#     6. dry run, then a real mirror restore from that backup (CLI, --yes);
+#     7. checks: no file left on an old id, marker file + DB back (both changed after the
 #        re-create, so only the restore can bring them back), mail + DNS present.
 #   TEST BOXES ONLY — it deletes and re-creates the account.
 #
@@ -55,14 +57,9 @@ if [ -d "$DA/data/users/$U" ]; then
     echo "deleted"
 else echo "already gone"; fi
 
-step "3. placeholder $HOLD on the old ids"
-if ! id "$HOLD" >/dev/null 2>&1; then
-    args=(-M -s /sbin/nologin)
-    getent passwd "$OU" >/dev/null || args+=(-u "$OU")
-    getent group "$OG" >/dev/null || { groupadd -g "$OG" "$HOLD"; args+=(-g "$OG"); }
-    useradd "${args[@]}" "$HOLD" || { echo "useradd failed" >&2; exit 1; }
-fi
-id "$HOLD"
+step "3. free DA's license slot (this DA build counts Unix users too)"
+if id "$HOLD" >/dev/null 2>&1; then userdel "$HOLD" && echo "removed $HOLD for now"; fi
+getent group "$HOLD" >/dev/null && groupdel "$HOLD"
 
 step "4. re-create $U (waits for DA's account limit, up to 3 min)"
 for i in 1 2 3 4 5 6 7; do
@@ -74,6 +71,25 @@ for i in 1 2 3 4 5 6 7; do
     echo "DA accounts now: $(ls "$DA/data/users" | tr '\n' ' ')" >&2
     exit 1
 done
+echo "DA created $U as uid $(id -u "$U") gid $(id -g "$U")"
+
+step "5. move $U to new ids (as on a rebuilt server), old ids to a placeholder"
+if [ "$(id -u "$U")" = "$OU" ] || [ "$(id -g "$U")" = "$OG" ]; then
+    nu=$((OU + 10)); while getent passwd "$nu" >/dev/null; do nu=$((nu + 1)); done
+    ng=$((OG + 10)); while getent group "$ng" >/dev/null; do ng=$((ng + 1)); done
+    cg="$(id -g "$U")"
+    groupmod -g "$ng" "$U" || { echo "groupmod failed" >&2; exit 1; }
+    usermod -u "$nu" -g "$ng" "$U" || { echo "usermod failed" >&2; exit 1; }
+    # usermod re-owns the home; also hand over the account's other files on the old ids.
+    # Separate passes: only the old uid -> new uid, only the old group -> new group
+    # (files in 'access' / 'mail' keep their group).
+    find /home/"$U" /etc/virtual/"$DOM" "/var/named/$DOM.db" -xdev -uid "$OU" -exec chown -h "$nu" {} + 2>/dev/null
+    find /home/"$U" /etc/virtual/"$DOM" "/var/named/$DOM.db" -xdev -gid "$cg" -exec chgrp -h "$ng" {} + 2>/dev/null
+fi
+getent group "$OG" >/dev/null || groupadd -g "$OG" "$HOLD"
+id "$HOLD" >/dev/null 2>&1 || useradd -M -s /sbin/nologin -u "$OU" -g "$OG" "$HOLD" \
+    || { echo "placeholder useradd failed" >&2; exit 1; }
+id "$HOLD"
 NU="$(id -u "$U")"; NG="$(id -g "$U")"
 echo "$U is now uid $NU gid $NG (was $OU/$OG)"
 [ "$NU" != "$OU" ] && ok "new uid differs from the backup" || bad "same uid $NU — test can't prove the remap"
@@ -82,18 +98,18 @@ echo "$U is now uid $NU gid $NG (was $OU/$OG)"
 echo fresh > "/home/$U/domains/$DOM/public_html/kbtest.txt"
 mysql -e "UPDATE ${U}_kbtest.t SET v=7"
 
-step "5a. dry run"
+step "6a. dry run"
 kiss-backup restore-unit "$U" --snapshot "$SNAP" --mirror --dry-run > /root/uid-test-dry.log 2>&1
 grep 'owner:' /root/uid-test-dry.log
 grep -q "user $U was $OU in the backup, is $NU now" /root/uid-test-dry.log \
     && ok "preview reports the moved uid" || bad "preview didn't report the uid move (see /root/uid-test-dry.log)"
 
-step "5b. restore (mirror, with safety snapshot)"
+step "6b. restore (mirror, with safety snapshot)"
 kiss-backup restore-unit "$U" --snapshot "$SNAP" --mirror --yes > /root/uid-test-restore.log 2>&1
 tail -6 /root/uid-test-restore.log
 grep -q "restore of $U done" /root/uid-test-restore.log && ok "restore finished" || bad "restore failed (see /root/uid-test-restore.log)"
 
-step "6. checks"
+step "7. checks"
 n="$(find /home/"$U" /etc/virtual/"$DOM" -xdev -uid "$OU" 2>/dev/null | wc -l)"
 [ "$n" = 0 ] && ok "no file left on the old uid $OU" || bad "$n file(s) still on old uid $OU"
 if [ "$OG" != "$NG" ]; then
@@ -109,6 +125,14 @@ f="/home/$U/domains/$DOM/public_html/kbtest.txt"
     && ok "DB ${U}_kbtest back (v=1)" || bad "DB value: $(mysql -N -B -e "SELECT v FROM ${U}_kbtest.t" 2>&1)"
 [ -e "/etc/virtual/$DOM" ] && ok "mail config /etc/virtual/$DOM present" || bad "no /etc/virtual/$DOM"
 [ -e "/var/named/$DOM.db" ] && ok "DNS zone /var/named/$DOM.db present" || bad "no /var/named/$DOM.db"
+# DA's mail login file may carry the account's uid:gid INSIDE it — a restore brings back the
+# backup's text, so a moved uid there would make mail logins act as the old id's new owner.
+pw="/etc/virtual/$DOM/passwd"
+if [ -s "$pw" ]; then
+    if awk -F: -v o="$OU" '$3 == o' "$pw" | grep -q .; then
+        bad "$pw still names the old uid $OU inside the file (mail would run as $HOLD): $(awk -F: '{print $1":"$3":"$4}' "$pw" | head -3)"
+    else ok "$pw does not carry the old uid"; fi
+else echo "note: no $pw (no mail accounts on $DOM yet) — uid inside it not tested"; fi
 
 printf '\n%s\n' "$([ "$fail" -eq 0 ] && echo 'ALL PASSED' || echo 'SOME CHECKS FAILED')"
 echo "Remove the placeholder afterwards with:  bash tests/da-uid-recreate-test.sh --cleanup"
