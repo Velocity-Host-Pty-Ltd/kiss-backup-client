@@ -7,15 +7,17 @@
 #   so a backup → restore test has files, mail, DNS and a DB to work with. TEST BOXES ONLY.
 #
 # Usage:  bash tests/da-make-test-user.sh [user] [domain]     # default: kbuser kbuser.test
+#         bash tests/da-make-test-user.sh --delete [user]      # remove it again (DA deletes the
+#                                                              # home, mail, DNS and its DBs)
 #
 set -euo pipefail
 trap 'echo "FAILED at line $LINENO: $BASH_COMMAND (rc $?)" >&2' ERR
 
+DEL=0; [ "${1:-}" = --delete ] && { DEL=1; shift; }
 U="${1:-kbuser}"; DOM="${2:-$U.test}"
 DA=/usr/local/directadmin
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
-[ -d "$DA/data/users/$U" ] && { echo "$U already exists — nothing done" >&2; exit 1; }
-
+[[ "$U" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$U" != admin ] || { echo "refusing user '$U'" >&2; exit 1; }
 API="$("$DA/directadmin" api-url | tail -1)"
 [[ "$API" == http* ]] || { echo "could not get 'directadmin api-url' (DA too old?)" >&2; exit 1; }
 IP="$(find "$DA/data/admin/ips/" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | head -1)"
@@ -31,6 +33,14 @@ call() {   # call <CMD> <post-data> — prints DA's reply, fails on error=1
     printf '%s: %s\n' "$1" "$(printf '%s' "$r" | sed 's/+/ /g; s/%20/ /g; s/%2E/./g')"
     case "$r" in *error=0*) ;; *) return 1 ;; esac
 }
+
+if [ "$DEL" -eq 1 ]; then
+    [ -d "$DA/data/users/$U" ] || { echo "$U does not exist — nothing done" >&2; exit 1; }
+    printf 'was uid %s\n' "$(id -u "$U" 2>/dev/null || echo '?')"
+    call CMD_API_SELECT_USERS "confirmed=Confirm&delete=yes&select0=$U"
+    exit 0
+fi
+[ -d "$DA/data/users/$U" ] && { echo "$U already exists — nothing done" >&2; exit 1; }
 
 # Unlimited custom account (no package needed), shell off, CGI/PHP/SSL on.
 lim=""
