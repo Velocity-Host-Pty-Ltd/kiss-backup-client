@@ -18,6 +18,8 @@ storage service by default, or to any restic SFTP repository you run yourself.
 - **Console + CLI** — a text-menu console (`kiss-console`) for day-to-day use, and a scriptable
   CLI (`kiss-backup`).
 
+**What's next:** see the [roadmap](ROADMAP.md).
+
 Control panels: **DirectAdmin** today (tested on CloudLinux 8.10 + DirectAdmin 1.713, including
 accounts caged under CloudLinux CageFS).
 cPanel and Plesk are planned. Without a panel adapter you still get full-server backups and
@@ -44,6 +46,7 @@ file-level restores.
 - [Upgrade and uninstall](#upgrade-and-uninstall)
 - [Known limits](#known-limits)
 - [Support, issues, licence](#support-issues-licence)
+- [Roadmap](ROADMAP.md)
 
 ---
 
