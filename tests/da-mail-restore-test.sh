@@ -60,14 +60,18 @@ send() { printf 'From: root@%s\nTo: %s\nSubject: %s\n\nkiss-backup mail restore 
     | /usr/sbin/sendmail -f "root@$(hostname -f)" "$ADDR"; }
 
 step "1. CageFS"
-if command -v cagefsctl >/dev/null 2>&1; then
-    if cagefsctl --list-enabled 2>/dev/null | grep -qx "$U"; then ok "$U is caged (CageFS enabled)"
-    else bad "$U is not in 'cagefsctl --list-enabled'"; fi
-else note "no cagefsctl — not a CloudLinux box, CageFS not tested"; fi
+# DA refuses an unlimited send limit (limit=0), hence a normal daily 100 below.
+CFS="$(command -v cagefsctl || ls /usr/sbin/cagefsctl 2>/dev/null || true)"
+if [ -n "$CFS" ]; then
+    if "$CFS" --list-enabled 2>/dev/null | grep -qx "$U"; then ok "$U is caged (CageFS enabled)"
+    else bad "$U is not in 'cagefsctl --list-enabled' (mode: $("$CFS" --display-user-mode 2>/dev/null | head -1))"; fi
+elif [ -e /etc/cloudlinux-release ] || grep -qi cloudlinux /etc/os-release 2>/dev/null; then
+    note "CloudLinux, but CageFS is not installed ($(rpm -q cagefs 2>&1 | head -1)) — not tested"
+else note "not a CloudLinux box — CageFS not tested"; fi
 
 step "2. mailbox $ADDR + message A"
 call "$UAPI" CMD_API_POP "action=delete&domain=$DOM&user=$BOX" 2>/dev/null || true
-call "$UAPI" CMD_API_POP "action=create&domain=$DOM&user=$BOX&passwd=$MPW&passwd2=$MPW&quota=0&limit=0" \
+call "$UAPI" CMD_API_POP "action=create&domain=$DOM&user=$BOX&passwd=$MPW&passwd2=$MPW&quota=0&limit=100" \
     || { echo "could not create $ADDR" >&2; exit 1; }
 send KBTEST-A
 wait_for KBTEST-A && ok "message A delivered to $MD" || bad "message A not delivered (exim -bp / exigrep KBTEST-A)"
