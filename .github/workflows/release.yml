@@ -1,0 +1,46 @@
+# Build and publish a GitHub release for every version tag that arrives through the
+# GitLab -> GitHub mirror: the tarball + SHA-256 from packaging/make-release.sh, with the
+# notes in docs/releases/<version>.md. Nothing to do by hand after `git push origin vX.Y.Z`.
+# Run it manually (Actions -> release -> Run workflow) for a tag pushed before this existed.
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write          # create the release + upload its files
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Build tarball + checksum
+        run: packaging/make-release.sh "$TAG"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${TAG#v}"
+          notes="docs/releases/${ver}.md"
+          [ -f "$notes" ] || { echo "Release ${TAG}" > /tmp/notes.md; notes=/tmp/notes.md; }
+          files=("dist/kiss-backup-client-${ver}.tar.gz" "dist/kiss-backup-client-${ver}.tar.gz.sha256")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --title "KISS Backup Client ${ver}" --notes-file "$notes" --verify-tag
+          fi

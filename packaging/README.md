@@ -15,4 +15,7 @@
   standalone installer (systemd timers/services it lays down, the `backup.env`/excludes templates).
   The standalone product will install its own way (no ansible-pull assumption).
 
-Releases: `packaging/make-release.sh` builds a versioned tarball + SHA-256 from a git tag.
+Releases: `packaging/make-release.sh` builds a versioned tarball + SHA-256 from a git tag. To
+release: write `docs/releases/<X.Y.Z>.md`, then `git tag -a vX.Y.Z -m … && git push origin vX.Y.Z`.
+The tag reaches GitHub through the mirror and `.github/workflows/release.yml` builds the tarball
+and publishes the GitHub release with it — nothing to upload by hand.
