@@ -93,6 +93,15 @@ cd kiss-backup-client
 sudo packaging/install.sh
 ```
 
+Or from a release tarball (each [release](https://github.com/Velocity-Host-Pty-Ltd/kiss-backup-client/releases)
+has `kiss-backup-client-<version>.tar.gz` and its `.sha256`):
+
+```bash
+sha256sum -c kiss-backup-client-0.1.0.tar.gz.sha256
+tar xzf kiss-backup-client-0.1.0.tar.gz && cd kiss-backup-client-0.1.0
+sudo packaging/install.sh
+```
+
 The installer copies the code to `/usr/local/lib/kiss-backup/`, adds three commands to
 `/usr/local/sbin` (`kiss-backup`, `kiss-backup-setup`, `kiss-console`), and installs the systemd
 units. **It does not start any backups** — that happens in the wizard, after the connection

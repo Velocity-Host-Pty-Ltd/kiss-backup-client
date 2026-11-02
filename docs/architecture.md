@@ -3,7 +3,8 @@
 **Status:** Draft. First architecture spec for the new repo.
 **Date:** 2026-10-31
 **Audience:** engineers working in `KISS-Backup-Client`.
-**Companion:** [`HANDOVER.md`](./HANDOVER.md) carries the business context and the extraction map
+**Companion:** the maintainers' internal project notes ("HANDOVER", not published) carry the
+business context and the extraction map
 from `vps-baseline`. This document is the technical design; where the two disagree, this one wins
 for *how the code is shaped*, HANDOVER wins for *why*.
 
@@ -325,7 +326,7 @@ brand/               # brand_header.sh + brand.conf (Velocity defaults) + resell
 packaging/           # installer + release packaging
   ansible/           #   backups_foundation role (reference for the standalone installer)
 tests/               # ported verify-* scripts + the contract conformance harness (§5)
-docs/                # HANDOVER.md, architecture.md (this file), EXTRACTION.md (decoupling checklist)
+docs/                # architecture.md (this file)
 ```
 
 ### 4.2 Config convention (decided)

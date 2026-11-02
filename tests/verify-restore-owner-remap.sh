@@ -8,7 +8,7 @@
 # map, a dry run and a root entry change nothing.
 #
 # Runs unprivileged: chown is replaced by a logging stub on PATH. The real chown is proven
-# on a test box by a restore after re-creating the account (HANDOVER §14 step 6d).
+# on a test box by a restore after re-creating the account (tests/da-uid-recreate-test.sh).
 #
 # Usage:  bash tests/verify-restore-owner-remap.sh
 #

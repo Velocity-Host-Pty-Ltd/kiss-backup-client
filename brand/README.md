@@ -4,4 +4,4 @@
 - `brand.conf` (to be created) — Velocity defaults baked in; a documented override file lets
   resellers supply their own. Includes the "support is chargeable" one-liner.
 
-See `docs/architecture.md` and HANDOVER §5.
+See `docs/architecture.md`.

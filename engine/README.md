@@ -8,4 +8,4 @@ auto-detection (dnf vs apt). Knows the adapter contract; knows no control panel.
 - `backup_setup.sh` — opt-in setup wizard (writes the config; being decoupled from KISS defaults).
 - `notify.sh` — notifications (mail/webhook; optional, non-fatal).
 
-See `docs/architecture.md` §3 (layers) and §4 (layout/config). Decoupling status: `docs/EXTRACTION.md`.
+See `docs/architecture.md` §3 (layers) and §4 (layout/config).
