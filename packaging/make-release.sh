@@ -24,7 +24,10 @@ mkdir -p "$OUT"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 printf '%s\n' "$VER" > "$tmp/VERSION"
 git archive --format=tar --prefix="$NAME/" "$TAG" > "$tmp/$NAME.tar"
-tar --append -f "$tmp/$NAME.tar" --transform "s,^,$NAME/," -C "$tmp" VERSION
+# Reproducible: VERSION gets the tag commit's time and root ownership, so the same tag builds
+# the same bytes anywhere (git archive already does this for the tracked files).
+tar --append -f "$tmp/$NAME.tar" --transform "s,^,$NAME/," --mtime="@$(git log -1 --format=%ct "$TAG")" \
+    --owner=0 --group=0 --numeric-owner -C "$tmp" VERSION
 gzip -9n < "$tmp/$NAME.tar" > "$OUT/$NAME.tar.gz"
 ( cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
 
