@@ -144,8 +144,25 @@ bash tests/da-mail-restore-test.sh [user] [domain]
 Found on the way: DirectAdmin refuses an unlimited send limit for a new mailbox, so the test
 uses a daily limit of 100.
 
-**Result:** ALL PASSED, 8 checks (2026-11-01). CageFS is not installed on the test server, so the
-CageFS check was skipped — not yet tested.
+**Result:** ALL PASSED, 8 checks (2026-11-01); re-run with the account caged under CageFS — ALL
+PASSED including the CageFS check (2026-11-02).
+
+### `da-cagefs-test.sh` — restore of a caged (CloudLinux CageFS) account
+
+```bash
+bash tests/da-cagefs-test.sh [user] [domain]
+```
+
+1. Installs and initialises CageFS if it isn't there; cages the test account.
+2. Backs up; changes the marker file and plants a file.
+3. Restores the account's files (mirror).
+4. Checks **from inside the cage** (`cagefs_enter_user`), i.e. as the account itself sees its
+   files: the account is still caged, the marker is back, the planted file is gone, the cage still
+   works. Then runs the mail test above.
+
+`/var/cagefs` (CageFS's per-user data) is not backed up — CageFS rebuilds it.
+
+**Result:** ALL PASSED (2026-11-02, CageFS 7.6.49).
 
 ---
 

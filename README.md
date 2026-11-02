@@ -16,7 +16,8 @@ storage service by default, or to any restic SFTP repository you run yourself.
 - **Console + CLI** — a text-menu console (`kiss-console`) for day-to-day use, and a scriptable
   CLI (`kiss-backup`).
 
-Control panels: **DirectAdmin** today (tested on CloudLinux 8.10 + DirectAdmin 1.713).
+Control panels: **DirectAdmin** today (tested on CloudLinux 8.10 + DirectAdmin 1.713, including
+accounts caged under CloudLinux CageFS).
 cPanel and Plesk are planned. Without a panel adapter you still get full-server backups and
 file-level restores.
 
@@ -354,6 +355,5 @@ Uninstall keeps `/etc/kiss-backup`, the passphrase and, of course, the backups i
 
 - **Bugs and feature requests:** [GitHub Issues](https://github.com/Velocity-Host-Pty-Ltd/kiss-backup-client/issues). Please include your OS, panel
   version and the output of `kiss-backup-setup status`.
-- **Commercial support** is available from Velocity Host (chargeable), and included with a
-  KISS storage subscription.
+- **Commercial support** is available from Velocity Host (chargeable).
 - **Licence:** [GNU AGPL v3](LICENSE).
