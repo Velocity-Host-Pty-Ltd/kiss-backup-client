@@ -916,12 +916,16 @@ restore_files_inplace() {
 
     if [ "$dry" -eq 1 ]; then
         log "files ($mode) — what would change:"
-        # Parent dirs of the unit's paths (/, /home) only get their metadata reset — not news.
-        grep -E '^(restored|updated|deleted) |^Summary' "$wd/files-plan.log" | while IFS= read -r l; do
+        # Folders (restic prints no size for them) only get timestamps/permissions reset — counted,
+        # not listed; parent dirs of the unit's paths (/, /home) aren't news at all.
+        local nd
+        nd="$(grep -E '^(restored|updated) ' "$wd/files-plan.log" | grep -vc ' with size ')"
+        grep -E '^(restored|updated) .* with size |^deleted |^Summary' "$wd/files-plan.log" | while IFS= read -r l; do
             f="$(printf '%s' "$l" | awk '{print $2}')"
             for p in "${paths[@]}"; do [[ "$p" == "$f"/* ]] || [ "$f" = / ] && continue 2; done
             printf '%s\n' "$l"
         done | head -200 | while IFS= read -r l; do log "  $l"; done
+        [ "$nd" -gt 0 ] && log "  ($nd folders: timestamps/permissions put back as in the backup)"
         log "  ($(grep -c '^unchanged ' "$wd/files-plan.log") files already match the backup)"
         return 0
     fi
